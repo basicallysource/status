@@ -61,14 +61,57 @@ curl -XPOST -H "Authorization: Bearer $TOKEN" \
 This is recorded and never rendered. A box is not a service — whether the API
 answers is a customer's question, and how hard the machine is working to answer
 it is ours. Read it back with `GET /api/hosts?hours=6[&host=blip]`, which needs
-the operator credential.
-
-Samples are kept for `HOST_HISTORY_DAYS`, shorter than the page's window because
-a row a minute per box is the only thing here that grows quickly.
+the operator credential and answers at most `HOST_QUERY_MAX_HOURS` at a time.
 
 Collectors read `/proc` and nothing else — no forks, no disk. Do not add anything
 that walks a filesystem: sizing directories is the one measurement on these boxes
 that costs real I/O.
+
+## What is public, and what is only recorded
+
+Two different questions share one system. A customer asks whether the thing they
+use works. We ask how hard the machines are working to make that true. The first
+is published; the second is ours.
+
+**Published** — the status of each service, uptime percentages and the daily
+bars, when an incident started and ended, response time, and the fact that an
+update happened.
+
+**Recorded, never rendered** — every metric value (disk, memory, load, swap, host
+uptime), version tags, deploy durations and how they compare, the numbers a
+threshold tripped on, and the error text from a probe. Read it through
+`GET /api/deploys` and `GET /api/hosts`, both operator-only.
+
+`src/publish.ts` is the boundary, and it is a closed vocabulary: the page says
+one of the sentences written there and nothing else. It has to work this way
+round. The version this replaced formatted whatever keys a heartbeat happened to
+carry, which made publication the default — a metric added on a box next month
+would have appeared on the public internet with nobody deciding it should. Now a
+new metric is recorded, queryable, and invisible until someone writes a sentence
+for it on purpose.
+
+So: **adding a metric is safe; publishing one is a deliberate edit to
+`publish.ts`.** If you want a number on the page, write the sentence a stranger
+should read, not the field name.
+
+## Retention
+
+Nothing is deleted by age. `HISTORY_DAYS` is how many bars the page draws, not
+how much is kept.
+
+It is affordable because a check that changes nothing writes a counter rather
+than a row, so a service costs a few rows a day however long it runs. The one
+table that grows is `host_samples`, at a sample a minute per box — about 84 MB
+a year per box, against D1's 10 GB per-database ceiling.
+
+Keeping it is the point: whether deploys are getting slower, whether a box has
+been creeping toward its memory for months, whether this outage rhymes with one
+last spring. None of that can be asked of data already thrown away.
+
+The thing to watch is not size but a query reading a year to draw a day, which
+is what `HOST_QUERY_MAX_HOURS` and the index on `host_samples (ts)` are for. If
+long-range charts ever get drawn routinely, roll the samples up to the hour and
+keep both — do not start deleting.
 
 ## Tokens
 
@@ -98,6 +141,7 @@ VALUES ('blip', '<sha256 of the token>', '["balloon","host:blip"]', <epoch>);
 | `POST /beat/<id>` | record a heartbeat (service token) |
 | `POST /deploy/<id>/start` `.../end` | report a deploy (service token) |
 | `POST /host/<name>` | record a box sample (service token, `host:<name>`) |
+| `GET /api/deploys` | versions and durations, not public (operator token) |
 | `GET /api/hosts` | box samples, not public (operator token) |
 | `POST /api/tick` | run a check now (operator token) |
 
@@ -116,8 +160,21 @@ curl -XPOST -H "Authorization: Bearer $TOKEN" \
 ```bash
 npm install
 npm run check     # tsc --noEmit && vitest
-npm run deploy
 ```
+
+Shipping is a tag. Pushing to main runs the tests and stops there — the thing
+that watches everything else should not change because of a stray commit:
+
+```bash
+git tag v3 && git push --tags
+```
+
+The workflow checks, deploys, then asks the live domain whether it is actually
+answering, because a green deploy onto a broken route is a thing that happens.
+It needs two repository secrets: `CLOUDFLARE_API_TOKEN` (an API token with *Edit
+Cloudflare Workers* and *D1 Edit*, scoped to this account) and
+`CLOUDFLARE_ACCOUNT_ID`. `npm run deploy` still works from a laptop for an
+emergency.
 
 Secrets, set with `wrangler secret put`. Each alert channel is off when its
 secret is missing:

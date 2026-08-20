@@ -29,18 +29,19 @@ export interface PageIncident {
   started: number;
   ended: number | null;
   detail: string | null;
-  deploy: string | null;
+  duringUpdate: boolean;
 }
 
+/**
+ * An update, as the public sees one: that it happened and when.
+ *
+ * No version and no duration. Both are recorded and both are ours; a reader
+ * here wants to know why the bars have a notch in them. See publish.ts.
+ */
 export interface PageDeploy {
   name: string;
-  version: string;
   started: number;
   ended: number | null;
-  /** Null when nobody measured it — see the `source` column. */
-  seconds: number | null;
-  typical: number | null;
-  slow: boolean;
 }
 
 export interface PageData {
@@ -107,29 +108,19 @@ const incident = (i: PageIncident, now: number) => `
       fmtDuration((i.ended ?? now) - i.started),
     )}${i.ended ? '' : ' <em>(ongoing)</em>'}</div>
     <div class="sub">${esc(utc(i.started))}${i.detail ? ` · ${esc(i.detail)}` : ''}${
-      // "during", never "because of". We know these coincided; we do not know
-      // one caused the other, and a status page should not guess in public.
-      i.deploy ? ` · during the ${esc(i.deploy)} update` : ''
+      i.duringUpdate ? ' · during an update' : ''
     }</div>
   </div>
 </li>`;
 
-const deploy = (d: PageDeploy, now: number) => `
+const deploy = (d: PageDeploy) => `
 <li>
   <span class="pip ${d.ended === null ? 'maintenance' : 'up'}"></span>
   <div>
-    <div><strong>${esc(d.name)}</strong> updated to ${esc(d.version)}${
-      d.ended === null
-        ? ` — <em>in progress, ${esc(fmtDuration(now - d.started))} so far</em>`
-        : d.seconds !== null
-          ? ` — took ${esc(fmtDuration(d.seconds))}`
-          : ''
+    <div><strong>${esc(d.name)}</strong> was updated${
+      d.ended === null ? ' — <em>in progress</em>' : ''
     }</div>
-    <div class="sub">${esc(utc(d.started))}${
-      // The comparison is the point of showing a number at all: 40s means
-      // nothing on its own, and "40s, usually 15s" means something.
-      d.slow && d.typical !== null ? ` · <span class="warn">usually ${esc(fmtDuration(d.typical))}</span>` : ''
-    }</div>
+    <div class="sub">${esc(utc(d.started))}</div>
   </div>
 </li>`;
 
@@ -223,7 +214,7 @@ a{color:inherit}
     d.deploys.length
       ? `<h2>Recent updates</h2><ul>${d.deploys
           .slice(0, 8)
-          .map((x) => deploy(x, d.now))
+          .map(deploy)
           .join('')}</ul>`
       : ''
   }

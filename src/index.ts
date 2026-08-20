@@ -1,4 +1,4 @@
-import { HISTORY_DAYS, HOST_HISTORY_DAYS, MONITORS, MONITOR_BY_ID } from './config';
+import { HISTORY_DAYS, HOST_QUERY_MAX_HOURS, MONITORS, MONITOR_BY_ID } from './config';
 import { overall, syncBoard, type BoardRow } from './board';
 import {
   abandonDeployStmt,
@@ -18,7 +18,6 @@ import {
   openDeployStmt,
   openIncidentStmt,
   pointDeployStmt,
-  pruneOld,
   pruneOrphans,
   recentDeploys,
   recentIncidents,
@@ -31,6 +30,7 @@ import { blame, deployEvents, excused, isSlow, typicalSeconds } from './deploy';
 import { fmtDuration, nextState, parseMeta, probe } from './monitor';
 import { sendAlert, worthAlerting } from './notify';
 import { faviconSvg } from './favicon';
+import { PUBLIC_NOTE, publicDetail } from './publish';
 import { renderPage, type DayCell, type PageData, type PageMonitor } from './page';
 import type { Env, Status } from './types';
 
@@ -124,19 +124,19 @@ export async function tick(env: Env, nowSec = Math.floor(Date.now() / 1000)) {
       .map(({ i, t }) => sendAlert(env, MONITORS[i], t, observations[i], nowSec)),
   );
 
+  // The board is a mirror of the page, so it says what the page says. Alerts
+  // are the other channel and still carry the cause — an alert without one is
+  // just a bell.
   const board: BoardRow[] = rows.map((r, i) => ({
     name: MONITORS[i].name,
     status: r.status,
     since: r.since,
-    detail: r.err ?? '',
+    detail: r.status === 'up' ? '' : PUBLIC_NOTE[r.status],
     uptime: 0,
   }));
   await syncBoard(env, await withUptime(env, board, nowSec), nowSec).catch((e) =>
     console.error('board sync:', e),
   );
-
-  const d = new Date(nowSec * 1000);
-  if (d.getUTCHours() === 4 && d.getUTCMinutes() < 1) await pruneOld(env.DB, nowSec);
 
   return { checked: rows.length, changed: alerts.length };
 }
@@ -153,24 +153,6 @@ async function withUptime(env: Env, board: BoardRow[], nowSec: number): Promise<
     }
     return { ...b, uptime: total ? (up / total) * 100 : 100 };
   });
-}
-
-/** The keys a service reports about its own deploys read as English rather than
- *  as field names. Everything else is `key value`. */
-const META_PHRASE: Record<string, (v: unknown) => string> = {
-  version: (v) => `on ${v}`,
-  deploying: (v) => `deploying ${v}`,
-};
-
-/** "service active · disk 55% · on r2026.08.20-3" — a heartbeat's metrics. */
-export function describeMeta(meta: Record<string, unknown> | null): string | null {
-  if (!meta) return null;
-  const parts = Object.entries(meta)
-    .filter(([, v]) => v !== null && v !== undefined && v !== '')
-    .map(([k, v]) =>
-      META_PHRASE[k] ? META_PHRASE[k](v) : k.endsWith('_pct') ? `${k.slice(0, -4)} ${v}%` : `${k} ${v}`,
-    );
-  return parts.length ? parts.join(' · ') : null;
 }
 
 function dayCell(day: string, up: number, down: number): DayCell {
@@ -203,18 +185,6 @@ async function buildPage(env: Env, nowSec: number): Promise<PageData> {
       total += r.up + r.down;
     }
     const status: Status = s?.status ?? 'unknown';
-    const detail =
-      status === 'maintenance'
-        ? // What is happening, not what is failing: mid-deploy, "service
-          // activating" is the symptom and the deploy is the news.
-          (describeMeta(parseMeta(s?.meta ?? null)) ?? 'A new version is being installed')
-        : status !== 'up'
-          ? (s?.last_err ?? '')
-          : s?.last_latency_ms != null
-          ? `Responding in ${s.last_latency_ms}ms`
-          : // A heartbeat has no latency, but it usually carries metrics. Showing
-            // them lets a disk be watched climbing rather than only alerted on.
-            (describeMeta(parseMeta(s?.meta ?? null)) ?? 'Healthy');
 
     return {
       name: m.name,
@@ -222,7 +192,9 @@ async function buildPage(env: Env, nowSec: number): Promise<PageData> {
       description: m.description,
       status,
       since: s?.since ?? null,
-      detail,
+      // Everything the public learns about this service is decided in
+      // publish.ts. Nothing from `meta` or `last_err` reaches the page.
+      detail: publicDetail(status, s?.last_latency_ms ?? null),
       uptime: total ? (up / total) * 100 : 100,
       days,
     };
@@ -232,32 +204,26 @@ async function buildPage(env: Env, nowSec: number): Promise<PageData> {
     now: nowSec,
     overall: overall(monitors),
     monitors,
+    // When it happened and how long it lasted, which is the reader's question.
+    // `detail` on the row is the probe's own words — "body missing \"ok\":true"
+    // names the string we assert on — so the public gets the state instead.
     incidents: incidents.map((i) => ({
       name: MONITOR_BY_ID[i.monitor]?.name ?? i.monitor,
       status: i.status,
       started: i.started,
       ended: i.ended,
-      detail: i.detail,
-      deploy: i.deploy,
+      detail: PUBLIC_NOTE[i.status],
+      // Whether an update was in flight, never which one. "during", not
+      // "because of": we know these coincided, not that one caused the other.
+      duringUpdate: i.deploy !== null,
     })),
-    deploys: deploys.map((d) => {
-      // Each service is judged against its own history, not a shared number:
-      // hive runs migrations before it answers and the bot just restarts.
-      const typical = typicalSeconds(deploys.filter((x) => x.monitor === d.monitor));
-      const seconds = d.ended !== null && d.source === 'reported' ? d.ended - d.started : null;
-      return {
-        name: MONITOR_BY_ID[d.monitor]?.name ?? d.monitor,
-        version: d.version,
-        started: d.started,
-        ended: d.ended,
-        // Only where it was measured. An inferred duration is an artefact of how
-        // often we looked, and putting it in a column labelled "took" would
-        // invite someone to compare it with one that means something.
-        seconds,
-        typical,
-        slow: seconds !== null && isSlow(seconds, typical),
-      };
-    }),
+    // That an update happened explains a gap in the bars, so it is public. The
+    // tag and the duration are ours — see /api/deploys.
+    deploys: deploys.map((d) => ({
+      name: MONITOR_BY_ID[d.monitor]?.name ?? d.monitor,
+      started: d.started,
+      ended: d.ended,
+    })),
   };
 }
 
@@ -404,13 +370,38 @@ export default {
         },
       });
     }
+    // The public view. Whatever renderPage draws, this returns — one shape, so
+    // there is no second place for something to leak from.
     if (path === '/api/status') return json(await buildPage(env, now()));
+
+    // ------------------------------------------------------------- operator
+    // Below this line is the other half of the split in publish.ts: everything
+    // we record and do not publish. All of it requires the operator credential,
+    // which a box's own token is not — blip may report about blip and cannot
+    // read any of this back.
+    if (path === '/api/deploys') {
+      if (!isOperator(req, env)) return json({ error: 'unauthorized' }, 401);
+      await ensureSchema(env.DB);
+      const rows = await recentDeploys(env.DB, 200);
+      return json({
+        deploys: rows.map((d) => {
+          // Each service against its own history, not a shared number: hive runs
+          // migrations before it answers and the bot just restarts.
+          const typical = typicalSeconds(rows.filter((x) => x.monitor === d.monitor));
+          // Measured only. An inferred duration is an artefact of how often we
+          // looked, and a column labelled "seconds" would invite comparing it
+          // with one that means something.
+          const seconds = d.ended !== null && d.source === 'reported' ? d.ended - d.started : null;
+          return { ...d, seconds, typical, slow: seconds !== null && isSlow(seconds, typical) };
+        }),
+      });
+    }
     if (path === '/api/hosts') {
-      // Operator-only. The public page says whether a service works; how hard a
-      // box is breathing to make that true is ours.
+      // The public page says whether a service works; how hard a box is
+      // breathing to make that true is ours.
       if (!isOperator(req, env)) return json({ error: 'unauthorized' }, 401);
       const q = new URL(req.url).searchParams;
-      const hours = Math.min(Number(q.get('hours') ?? 6) || 6, HOST_HISTORY_DAYS * 24);
+      const hours = Math.min(Number(q.get('hours') ?? 6) || 6, HOST_QUERY_MAX_HOURS);
       await ensureSchema(env.DB);
       const rows = await hostSamples(env.DB, now() - hours * 3600, q.get('host') ?? undefined);
       return json({

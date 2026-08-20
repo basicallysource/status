@@ -95,18 +95,22 @@ export const DEPLOY_MAX_OPEN_SEC = 1800;
 /** How many past deploys a service's typical duration is drawn from. */
 export const DEPLOY_TYPICAL_WINDOW = 10;
 
-/** Days of history the page draws. */
+/**
+ * Days of bars the page draws.
+ *
+ * A window onto the data, not a limit on it: nothing is deleted when it scrolls
+ * off the end. See the note on retention in db.ts.
+ */
 export const HISTORY_DAYS = 90;
 
 /**
- * Days of per-box samples kept.
+ * The longest span a single /api/hosts query will answer.
  *
- * A row a minute per box is the only thing here that grows quickly, so this is
- * shorter than the page's window on purpose. Two weeks answers "is this getting
- * worse" and costs a few megabytes; raising it is cheap if that stops being
- * long enough.
+ * Not how long samples are kept — how much one request may read. host_samples
+ * grows by a row a minute per box, and an uncapped range over it is the easy
+ * way to read a year in order to draw a day.
  */
-export const HOST_HISTORY_DAYS = 14;
+export const HOST_QUERY_MAX_HOURS = 24 * 30;
 
 export const SITE = {
   title: 'basically Status',

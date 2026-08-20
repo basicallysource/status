@@ -5,7 +5,7 @@ import { deployEvents, excused, isOpen, isSlow, typicalSeconds, type DeployRow }
 import { allowed } from '../src/auth';
 import { alertText, worthAlerting } from '../src/notify';
 import { DEPLOY_MAX_OPEN_SEC, MAINTENANCE_MAX_SEC } from '../src/config';
-import { describeMeta } from '../src/index';
+import { PUBLIC_NOTE, publicDetail } from '../src/publish';
 import type {
   HeartbeatMonitor,
   HttpMonitor,
@@ -188,18 +188,36 @@ describe('fmtDuration', () => {
   });
 });
 
-describe('describeMeta', () => {
-  it('renders a heartbeat’s metrics readably', () => {
-    expect(describeMeta({ service: 'active', disk_pct: 55 })).toBe('service active · disk 55%');
+describe('what the public is told', () => {
+  // The property under test is what the page CANNOT say. A closed vocabulary is
+  // only worth having if nothing routes around it, so these assert absence.
+  it('says how the service behaves toward a caller, when that is known', () => {
+    expect(publicDetail('up', 143)).toBe('Responding in 143ms');
   });
 
-  it('phrases the deploy keys as English', () => {
-    expect(describeMeta({ version: 'r1', deploying: 'r2' })).toBe('on r1 · deploying r2');
+  it('tells a heartbeat’s user it is healthy, and none of its metrics', () => {
+    const said = publicDetail('up', null);
+    expect(said).toBe('Healthy');
+    for (const leak of ['disk', '59', 'r2026', 'service', 'active']) {
+      expect(said).not.toContain(leak);
+    }
   });
 
-  it('is null when there is nothing to say', () => {
-    expect(describeMeta(null)).toBeNull();
-    expect(describeMeta({})).toBeNull();
+  it('never names the metric that tripped, or its threshold', () => {
+    const said = publicDetail('degraded', null);
+    expect(said).toBe(PUBLIC_NOTE.degraded);
+    expect(said).not.toMatch(/\d/);
+    expect(said.toLowerCase()).not.toContain('disk');
+  });
+
+  it('has a sentence for every state, so nothing falls through to raw data', () => {
+    for (const s of ['up', 'degraded', 'down', 'maintenance', 'unknown'] as const) {
+      expect(PUBLIC_NOTE[s]).toBeTruthy();
+    }
+  });
+
+  it('puts no number in any of them but a measured response time', () => {
+    for (const note of Object.values(PUBLIC_NOTE)) expect(note).not.toMatch(/\d/);
   });
 });
 

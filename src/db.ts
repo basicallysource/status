@@ -1,11 +1,25 @@
-import { HISTORY_DAYS, HOST_HISTORY_DAYS } from './config';
 import type { DeployRow, DeploySource } from './deploy';
 import type { StateRow, Status } from './types';
 
-// Four tables, each earning its place: where things stand, when a beat last
-// landed, the daily rollup the bars are drawn from, and the incident log.
-// Raw per-check rows are deliberately absent — the incident log already carries
-// the timeline, at a fraction of the writes.
+// Where things stand, when a beat last landed, the daily rollup the bars are
+// drawn from, the incident log, deploys, box samples, and the credentials that
+// may write any of it. Raw per-check rows are deliberately absent — the incident
+// log already carries the timeline, at a fraction of the writes.
+//
+// Nothing here is ever deleted by age. What the page draws is a window (see
+// HISTORY_DAYS); what is kept is everything. Cheapness is why: a check that
+// changes nothing writes one counter, so the whole of the service history is a
+// few rows a day, and the one table that does grow — a sample a minute per box —
+// costs about 84 MB a year for a box, against D1's 10 GB ceiling.
+//
+// The reason is that the interesting questions arrive late. Whether deploys got
+// slower, whether a box has been creeping toward its memory for months, whether
+// this outage rhymes with one last spring: none of those can be asked of data
+// that was already thrown away, and all of them are the point of writing it
+// down. The only pruning left is pruneOrphans, which is about correctness — a
+// service removed from the config, not a row that got old.
+//
+// The thing to watch is not size, it is a query reading a year to draw a day.
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS state (
   monitor         TEXT PRIMARY KEY,
@@ -65,6 +79,11 @@ CREATE TABLE IF NOT EXISTS host_samples (
   metrics TEXT    NOT NULL,
   PRIMARY KEY (host, ts)
 );
+-- The primary key answers "this box, this range". A range with no box named
+-- cannot use it, since ts is the second column, and would read the whole table
+-- to return an hour of it. That is affordable at a week of rows and is not
+-- affordable at a year of them.
+CREATE INDEX IF NOT EXISTS host_samples_ts ON host_samples (ts);
 CREATE TABLE IF NOT EXISTS kv (k TEXT PRIMARY KEY, v TEXT NOT NULL);
 `;
 
@@ -373,22 +392,6 @@ export const kvSetStmt = (db: D1Database, k: string, v: string) =>
   db
     .prepare('INSERT INTO kv (k, v) VALUES (?1, ?2) ON CONFLICT(k) DO UPDATE SET v = ?2')
     .bind(k, v);
-
-/** Drops history that has aged past the window the page draws. */
-export async function pruneOld(db: D1Database, nowSec: number): Promise<void> {
-  const cutoff = nowSec - HISTORY_DAYS * 86400;
-  await db.batch([
-    db.prepare('DELETE FROM daily WHERE day < ?1').bind(dayKey(cutoff)),
-    db.prepare('DELETE FROM incidents WHERE ended IS NOT NULL AND ended < ?1').bind(cutoff),
-    db.prepare('DELETE FROM deploys WHERE started < ?1').bind(cutoff),
-    // A row a minute per box is the only table here that grows quickly, and it
-    // is kept for long enough to answer "is this getting worse" rather than for
-    // as long as the page draws.
-    db
-      .prepare('DELETE FROM host_samples WHERE ts < ?1')
-      .bind(nowSec - HOST_HISTORY_DAYS * 86400),
-  ]);
-}
 
 /**
  * Forgets every monitor no longer in the config. Without this, removing one
