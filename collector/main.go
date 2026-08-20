@@ -92,7 +92,13 @@ func run(ctx context.Context, cfg Config, collector *Collector) {
 
 	ticker := time.NewTicker(cfg.Interval)
 	defer ticker.Stop()
-	updates := time.NewTicker(updateInterval)
+
+	// Check for a new version shortly after starting, not a full interval
+	// later. A box that was off for a week should come back current rather than
+	// spend half an hour on whatever it was running when it stopped — and if a
+	// bad version is crash-looping, this is the path that pulls the fix.
+	// Not instantly: a restart loop should not hammer GitHub either.
+	updates := time.NewTimer(2 * time.Minute)
 	defer updates.Stop()
 
 	for {
@@ -110,6 +116,7 @@ func run(ctx context.Context, cfg Config, collector *Collector) {
 			if cfg.UpdateFrom != "" {
 				selfUpdate(ctx, cfg.UpdateFrom)
 			}
+			updates.Reset(updateInterval)
 		}
 	}
 }
