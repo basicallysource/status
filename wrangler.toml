@@ -1,0 +1,31 @@
+name = "basically-status"
+main = "src/index.ts"
+compatibility_date = "2026-08-20"
+workers_dev = true
+
+# custom_domain creates and owns the DNS record, so the hostname is part of the
+# deploy rather than a thing someone has to remember to point.
+routes = [{ pattern = "status.basically.website", custom_domain = true }]
+
+# One minute is the floor Cloudflare allows and the whole point of the service.
+# Free plan allows 5 crons per account; this is the only one in use.
+[triggers]
+crons = ["* * * * *"]
+
+[[d1_databases]]
+binding = "DB"
+database_name = "basically-status"
+database_id = "8e549190-0284-4f28-8c24-391590910a67"
+
+# Secrets (wrangler secret put <NAME>), never committed. Every alert channel is
+# optional: an absent secret disables that channel rather than failing a check.
+#   BEAT_TOKEN             authenticates POST /beat/<id> and POST /api/tick
+#   PUSH_API, PUSH_TOKEN   push-notification endpoint and its credential
+#   DISCORD_ALERT_WEBHOOK  one message per state change
+#   DISCORD_BOARD_WEBHOOK  one message edited in place: the page, mirrored
+#
+# PUSH_API is a secret rather than a var deliberately: it is a private endpoint,
+# and this file is committed.
+
+[observability]
+enabled = true

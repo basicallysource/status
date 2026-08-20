@@ -1,0 +1,72 @@
+import type { Monitor } from './types';
+
+// What we watch. Adding a service is a change to this list and nothing else.
+//
+// Descriptions appear on the public page, so they are written for whoever is
+// checking whether the thing they use is broken — not for us.
+
+export const MONITORS: Monitor[] = [
+  {
+    id: 'hive',
+    name: 'Hive API',
+    group: 'Hive',
+    kind: 'http',
+    url: 'https://hive.basically.website/api/health',
+    // A 200 that says the wrong thing is not healthy.
+    expectBody: '"ok":true',
+    // An overloaded origin fails by hanging rather than by refusing, so a
+    // generous timeout would report it healthy while nothing actually worked.
+    timeoutMs: 8000,
+    description: 'Machine sync, sorting data, and accounts.',
+  },
+  {
+    id: 'hive-web',
+    name: 'Hive web app',
+    group: 'Hive',
+    kind: 'http',
+    url: 'https://hive.basically.website/',
+    timeoutMs: 10000,
+    description: 'The Hive dashboard in your browser.',
+  },
+  {
+    id: 'basically-website',
+    name: 'basically.website',
+    group: 'basically',
+    kind: 'http',
+    url: 'https://basically.website/',
+    timeoutMs: 10000,
+    description: 'Our main site.',
+  },
+  {
+    id: 'balloon',
+    name: 'Balloon',
+    group: 'balloon',
+    kind: 'heartbeat',
+    // Beaten by a timer on the host rather than from inside the bot itself, so
+    // that a stopped or wedged bot is still reported by a healthy host, and a
+    // host that dies shows up as silence.
+    // A restart during a deploy is well under this; ten minutes is a real outage.
+    staleAfterSec: 600,
+    thresholds: {
+      service: { equals: 'active', level: 'down' },
+      // A full disk has taken this bot down before. Warn long before it does.
+      disk_pct: { warn: 85, crit: 93 },
+    },
+    description: 'Our Discord community bot.',
+  },
+];
+
+export const MONITOR_BY_ID: Record<string, Monitor> = Object.fromEntries(
+  MONITORS.map((m) => [m.id, m]),
+);
+
+/** Consecutive failures before we call it down. One is too jumpy to trust. */
+export const FAILURES_BEFORE_DOWN = 2;
+
+/** Days of history the page draws. */
+export const HISTORY_DAYS = 90;
+
+export const SITE = {
+  title: 'basically Status',
+  url: 'https://status.basically.website',
+};
