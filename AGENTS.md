@@ -14,6 +14,43 @@ The page is public and the repo should be publishable.
 Internal context — real hostnames, credential locations — is in the gitignored
 `AGENTS.local.md`.
 
+## What we record and what we publish are different sets
+
+`src/publish.ts` is the boundary, and it is a closed vocabulary: the page says
+one of the sentences written there and nothing else.
+
+**Adding a metric is safe. Publishing one is a deliberate edit to
+`publish.ts`.** If a number belongs on the page, write the sentence a stranger
+should read — never the field name, never the threshold it tripped.
+
+It has to fail this way round. The version this replaced formatted whatever keys
+a heartbeat happened to carry and printed them, so publishing was the default
+and a metric added to a box's beat script next month would have landed on the
+public internet with nobody deciding it should. Don't reintroduce anything that
+renders `meta`, `last_err`, or a version tag into the page or the board.
+
+Public: status, uptime, the daily bars, incident times, response time, and that
+an update happened. Ours: every metric value, version tags, deploy durations,
+threshold numbers, probe error text, and all host samples — reachable through
+`/api/deploys` and `/api/hosts`, both operator-only.
+
+## Deploying
+
+A tag ships. Push to main runs the tests and stops there.
+
+```bash
+git tag v<n> && git push origin v<n>
+```
+
+`.github/workflows/deploy.yml` checks, deploys, then curls the live domain,
+because a green deploy onto a broken route is a thing that happens. Actions is
+free here because the repo is public. `npm run deploy` still works from a laptop
+if CI is the thing that's broken.
+
+The worker's credential is a scoped token in repo secrets — Workers Scripts
+Write, D1 Write, Account Settings Read, and nothing else. Minting one needs the
+dashboard, so it is not something a session can replace on its own.
+
 ## A service's claim about itself is never load-bearing
 
 `deploying` lets a service say its own failure is routine, which is a mute
@@ -48,7 +85,15 @@ analytics API.
 
 - Removing a service from `config.ts` sweeps its rows on the next deploy
   (`pruneOrphans`). Without that a stranded incident never closes and the page
-  reports an outage forever.
+  reports an outage forever. It is the only sweep left, and it is about
+  correctness, not age.
+- **Nothing is deleted for being old, and don't add anything that is.** A check
+  that changes nothing writes a counter rather than a row, so history is cheap;
+  the one table that grows is `host_samples`, at ~84 MB per box per year against
+  D1's 10 GB ceiling. `HISTORY_DAYS` is how many bars the page draws, not how
+  much is kept. The thing to watch is a query reading a year to draw a day —
+  hence `HOST_QUERY_MAX_HOURS` and the index on `host_samples (ts)`. If
+  long-range charts ever get drawn routinely, roll up to the hour and keep both.
 - Worth keeping green: the state machine tests (flap guard, and thresholds
   producing `degraded` vs `down`). Probe tests inject a fake `fetch` — never hit
   a real host in a test.
