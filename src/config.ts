@@ -26,20 +26,11 @@ export const MONITORS: Monitor[] = [
     kind: 'http',
     url: 'https://hive.basically.website/',
     timeoutMs: 10000,
-    description: 'The Hive dashboard in your browser.',
-  },
-  {
-    id: 'basically-website',
-    name: 'basically.website',
-    group: 'basically',
-    kind: 'http',
-    url: 'https://basically.website/',
-    timeoutMs: 10000,
-    description: 'Our main site.',
+    description: 'Browser dashboard.',
   },
   {
     id: 'balloon',
-    name: 'Balloon',
+    name: 'balloon',
     group: 'balloon',
     kind: 'heartbeat',
     // Beaten by a timer on the host rather than from inside the bot itself, so
@@ -52,7 +43,15 @@ export const MONITORS: Monitor[] = [
       // A full disk has taken this bot down before. Warn long before it does.
       disk_pct: { warn: 85, crit: 93 },
     },
-    description: 'Our Discord community bot.',
+    description: 'Discord bot.',
+  },
+  {
+    id: 'basically-website',
+    name: 'basically.website',
+    group: 'basically',
+    kind: 'http',
+    url: 'https://basically.website/',
+    timeoutMs: 10000,
   },
 ];
 
