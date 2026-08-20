@@ -246,3 +246,30 @@ func writeFixture(t *testing.T, root, rel, body string) {
 		t.Fatal(err)
 	}
 }
+
+func TestDockerContainersAreFoundByName(t *testing.T) {
+	// Docker names its cgroup scope for the container's full 64-char id, which
+	// nothing else on the box knows, so a name in config has to be resolved
+	// through docker's own state before any memory can be read for it.
+	s := Sample{}
+	NewCollector(fixture).readServices(s, []string{"hive-backend"})
+	if got := s["svc_hive_backend_mem_mb"]; got != 2147.5 {
+		t.Errorf("svc_hive_backend_mem_mb = %v, want 2147.5", got)
+	}
+	if got := s["svc_hive_backend_oom"]; got != int64(1) {
+		t.Errorf("svc_hive_backend_oom = %v, want 1", got)
+	}
+}
+
+func TestOnlyRunningContainersAreLookedUp(t *testing.T) {
+	// The map is built from cgroup scopes, which only exist for running
+	// containers — not from /var/lib/docker/containers, which keeps a directory
+	// for every container that ever ran here and would grow without bound.
+	found := NewCollector(fixture).dockerContainers()
+	if len(found) != 1 {
+		t.Errorf("found %d containers, want 1 (only the one with a live scope)", len(found))
+	}
+	if _, ok := found["hive-backend"]; !ok {
+		t.Errorf("hive-backend not resolved: %v", found)
+	}
+}

@@ -12,7 +12,7 @@
 # process list of every other user on the box.
 set -euo pipefail
 
-HOST="${HOST:?HOST is required, and must match the token's host: scope}"
+: "${HOST:?is required, and must match the host scope on the token}"
 MONITOR="${MONITOR:-}"
 UNIT="${UNIT:-}"
 SERVICES="${SERVICES:-}"
@@ -29,7 +29,10 @@ mkdir -p "$ENV_DIR"
 token=""
 for old in /etc/hive-status/beat.env /etc/balloon-status/beat.env; do
   [ -r "$old" ] || continue
-  token=$(sed -n 's/^BEAT_TOKEN=//p' "$old" | tr -d "\"'" | head -1)
+  # Sourced in a subshell rather than parsed: the shell already knows how to
+  # unquote its own assignment syntax, and hand-rolling that is where the
+  # nested quoting goes wrong.
+  token=$(. "$old" >/dev/null 2>&1; printf '%s' "${BEAT_TOKEN:-}")
   [ -n "$token" ] && break
 done
 

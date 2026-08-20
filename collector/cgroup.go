@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -58,18 +59,53 @@ func (c *Collector) readServices(s Sample, units []string) {
 // if it is not running. A stopped service has no cgroup at all, which is why an
 // absent key here means "not running" rather than "zero bytes".
 func (c *Collector) serviceDir(unit string) string {
-	for _, candidate := range []string{
-		// A systemd service: balloon-bot.service.
-		filepath.Join(cgroupRoot, "system.slice", unit),
-		// A docker container under systemd's docker slice, which is where
-		// hive's containers live.
-		filepath.Join(cgroupRoot, "system.slice", "docker-"+unit+".scope"),
-	} {
-		if fi, err := os.Stat(c.path(candidate)); err == nil && fi.IsDir() {
-			return candidate
-		}
+	// A systemd service: balloon-bot.service.
+	candidate := filepath.Join(cgroupRoot, "system.slice", unit)
+	if fi, err := os.Stat(c.path(candidate)); err == nil && fi.IsDir() {
+		return candidate
+	}
+	// A docker container. The scope is named for the container's full 64-char
+	// id, which nothing else on the box knows, so the name has to be looked up.
+	if id, ok := c.dockerContainers()[unit]; ok {
+		return filepath.Join(cgroupRoot, "system.slice", "docker-"+id+".scope")
 	}
 	return ""
+}
+
+// dockerContainers maps a running container's name to its full id.
+//
+// Driven from the cgroup directory rather than from docker's state directory,
+// which matters: /var/lib/docker/containers accumulates every container that has
+// ever run here, and reading all of it once a minute to find four would be
+// exactly the kind of growing cost this collector is supposed to not have. The
+// cgroup only holds what is running now.
+//
+// Not `docker ps`: that is a fork and a round trip to a daemon which, on the box
+// where this matters most, is the daemon under strain.
+func (c *Collector) dockerContainers() map[string]string {
+	out := map[string]string{}
+	scopes, err := filepath.Glob(c.path(cgroupRoot, "system.slice", "docker-*.scope"))
+	if err != nil {
+		return out
+	}
+	for _, scope := range scopes {
+		id := strings.TrimSuffix(strings.TrimPrefix(filepath.Base(scope), "docker-"), ".scope")
+		if len(id) < 12 {
+			continue
+		}
+		var cfg struct {
+			Name string `json:"Name"`
+		}
+		raw, err := os.ReadFile(c.path("var/lib/docker/containers", id, "config.v2.json"))
+		if err != nil || json.Unmarshal(raw, &cfg) != nil {
+			continue
+		}
+		// Docker stores it with a leading slash, as a path.
+		if name := strings.TrimPrefix(cfg.Name, "/"); name != "" {
+			out[name] = id
+		}
+	}
+	return out
 }
 
 // serviceLabel turns a unit name into something safe to use as a metric key:
