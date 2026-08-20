@@ -20,10 +20,11 @@ import { DEPLOY_GRACE_SEC, DEPLOY_MAX_OPEN_SEC, DEPLOY_TYPICAL_WINDOW } from './
  * `reported` is the deploying process telling us when it began and ended, so the
  * number is exact. `observed` is inferred from a heartbeat, so it is only ever
  * accurate to the beat interval — good enough to mark that a deploy happened,
- * useless for asking whether deploys are getting slower. Only reported ones are
- * allowed into the timing statistics.
+ * useless for asking whether deploys are getting slower. `abandoned` is one that
+ * started and never reported an end, so its duration is not a duration at all.
+ * Only reported ones are allowed into the timing statistics.
  */
-export type DeploySource = 'reported' | 'observed';
+export type DeploySource = 'reported' | 'observed' | 'abandoned';
 
 /** A deploy that is running, or one that has finished. */
 export interface DeployRow {

@@ -1,6 +1,7 @@
 import { HISTORY_DAYS, MONITORS, MONITOR_BY_ID } from './config';
 import { overall, syncBoard, type BoardRow } from './board';
 import {
+  abandonDeployStmt,
   backfillDownStmt,
   beatStmt,
   closeDeployStmt,
@@ -317,10 +318,18 @@ async function handleDeploy(req: Request, env: Env, id: string, phase: string): 
   if (phase === 'start') {
     const version = (body.version ?? '').trim();
     if (!version) return json({ error: 'version is required' }, 400);
+
+    // Starting the same version twice is one deploy being retried, not two
+    // deploys. An installer that waits for a running job and comes back next
+    // minute has to be able to say "still me" without either forking the record
+    // or resetting the clock on how long this has really been going.
+    if (open && open.version === version) {
+      await touchTokenStmt(env.DB, who, nowSec).run();
+      return json({ ok: true, monitor: id, version, started: open.started, resumed: true });
+    }
+
     const writes = [openDeployStmt(env.DB, id, version, nowSec, 'reported')];
-    // A previous deploy that never reported an end belongs to a run that died.
-    // Close it at its own start so it contributes nothing to the timings.
-    if (open) writes.unshift(closeDeployStmt(env.DB, id, open.started));
+    if (open) writes.unshift(abandonDeployStmt(env.DB, id, nowSec));
     writes.push(touchTokenStmt(env.DB, who, nowSec));
     await env.DB.batch(writes);
     return json({ ok: true, monitor: id, version, started: nowSec });

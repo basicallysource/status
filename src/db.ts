@@ -228,6 +228,16 @@ export const pointDeployStmt = (db: D1Database, monitor: string, version: string
     )
     .bind(monitor, version, ts);
 
+/** Give up on a deploy that started and never reported an end. Its span is not a
+ *  duration, so it is marked rather than closed, and the timings ignore it. */
+export const abandonDeployStmt = (db: D1Database, monitor: string, ts: number) =>
+  db
+    .prepare(
+      `UPDATE deploys SET ended = ?2, source = 'abandoned' WHERE id =
+        (SELECT id FROM deploys WHERE monitor = ?1 AND ended IS NULL ORDER BY started DESC LIMIT 1)`,
+    )
+    .bind(monitor, ts);
+
 export const closeDeployStmt = (db: D1Database, monitor: string, ts: number) =>
   db
     .prepare(
