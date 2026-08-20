@@ -87,11 +87,25 @@ function str(v: unknown): string | null {
 export const deployingVersion = (meta: Meta): string | null => str(meta?.deploying);
 export const runningVersion = (meta: Meta): string | null => str(meta?.version);
 
-/** What changed about a service's deploy state between two reports. */
-export function deployEvents(prev: Meta, next: Meta): DeployEvent[] {
+/**
+ * What changed about a service's deploy state between two reports.
+ *
+ * `known` is the service's most recent deploy row. A service that reports its
+ * own deploys is also visible through its heartbeat, and without this the same
+ * deploy is recorded twice — once measured, once inferred a minute later. The
+ * measurement wins and the inference stays quiet, so inference remains the
+ * fallback for services that do not report rather than a duplicate of those
+ * that do.
+ */
+export function deployEvents(prev: Meta, next: Meta, known?: DeployRow): DeployEvent[] {
   const was = deployingVersion(prev);
   const now = deployingVersion(next);
   const events: DeployEvent[] = [];
+  const alreadyMeasured = (v: string | null) =>
+    !!v && known?.source === 'reported' && known.version === v;
+
+  // Everything below is about a version somebody already timed properly.
+  if (alreadyMeasured(now) || alreadyMeasured(runningVersion(next))) return events;
 
   if (was !== now) {
     // A window that never closed before a different one opened belongs to a

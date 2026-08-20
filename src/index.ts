@@ -65,7 +65,7 @@ export async function tick(env: Env, nowSec = Math.floor(Date.now() / 1000)) {
     const prevMeta = parseMeta(prev?.meta ?? null);
     const meta = obs.meta ?? prevMeta;
 
-    for (const e of deployEvents(prevMeta, obs.meta)) {
+    for (const e of deployEvents(prevMeta, obs.meta, deploys[m.id])) {
       if (e.kind === 'opened') writes.push(openDeployStmt(env.DB, m.id, e.version, nowSec));
       else if (e.kind === 'closed') writes.push(closeDeployStmt(env.DB, m.id, nowSec));
       else writes.push(pointDeployStmt(env.DB, m.id, e.version, nowSec));

@@ -243,6 +243,46 @@ describe('deploy events', () => {
     const same = { version: 'r1', deploying: 'r2' };
     expect(deployEvents(same, { ...same })).toEqual([]);
   });
+
+  it('does not re-record a deploy the service already measured', () => {
+    const measured: DeployRow = {
+      monitor: 'x',
+      version: 'r2',
+      started: 100,
+      ended: 118,
+      source: 'reported',
+    };
+    // The heartbeat notices the version change a minute after the reporter
+    // already timed it. Without this the page lists the same deploy twice.
+    expect(deployEvents({ version: 'r1' }, { version: 'r2' }, measured)).toEqual([]);
+    expect(deployEvents({ version: 'r1' }, { version: 'r1', deploying: 'r2' }, measured)).toEqual([]);
+  });
+
+  it('still infers a deploy the service did not report', () => {
+    const measured: DeployRow = {
+      monitor: 'x',
+      version: 'r2',
+      started: 100,
+      ended: 118,
+      source: 'reported',
+    };
+    expect(deployEvents({ version: 'r2' }, { version: 'r3' }, measured)).toEqual([
+      { kind: 'missed', version: 'r3' },
+    ]);
+  });
+
+  it('does not let an inferred row silence a later inference of itself', () => {
+    const inferred: DeployRow = {
+      monitor: 'x',
+      version: 'r2',
+      started: 100,
+      ended: 100,
+      source: 'observed',
+    };
+    expect(deployEvents({ version: 'r1' }, { version: 'r2' }, inferred)).toEqual([
+      { kind: 'missed', version: 'r2' },
+    ]);
+  });
 });
 
 describe('what a declared deploy may excuse', () => {
