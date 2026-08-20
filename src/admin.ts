@@ -37,12 +37,22 @@ h1{font-size:18px;font-weight:600;margin:0 0 4px}
 button,select{font:inherit;color:inherit;background:var(--card);border:1px solid var(--line);
   border-radius:7px;padding:6px 11px;cursor:pointer}
 button.on{background:var(--ink);border-color:var(--ink);color:#fff}
-.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(330px,1fr));gap:10px;margin-top:14px}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:10px;margin-top:14px}
 .chart{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:12px 14px 8px}
 .chart h3{margin:0;font-size:12.5px;font-weight:600}
 .now{float:right;font-variant-numeric:tabular-nums;color:var(--muted);font-weight:500}
-svg{display:block;width:100%;height:78px;margin-top:6px;overflow:visible}
-.axis{fill:var(--muted);font-size:9px}
+svg{display:block;width:100%;height:auto;margin-top:4px}
+.axis{fill:var(--muted);font-size:8px;font-variant-numeric:tabular-nums}
+.frame{stroke:var(--line);stroke-width:1}
+.mark{stroke:var(--deploy);stroke-width:1;stroke-dasharray:2 2;opacity:.9}
+.cross{stroke:var(--muted);stroke-width:1;opacity:.6}
+.cursor circle{fill:var(--ink)}
+svg{cursor:crosshair}
+/* Reserved whether or not the mouse is over it, so hovering does not shove
+   every other card down the page. */
+.read{margin:2px 0 0;height:16px;font-size:11.5px;color:var(--muted);
+  font-variant-numeric:tabular-nums}
+.empty{margin:14px 0 18px;font-size:12px;color:var(--muted)}
 .note{color:var(--muted);font-size:12px;margin-top:10px}
 .gate{max-width:440px;margin:80px auto;background:var(--card);border:1px solid var(--line);
   border-radius:10px;padding:22px}
@@ -157,9 +167,13 @@ function draw(hosts, deploys, range) {
       <span style="flex:1"></span>
       \${RANGES.map((x, i) => \`<button data-range="\${i}" class="\${i === state.range ? 'on' : ''}">\${x.label}</button>\`).join('')}
     </div>
-    <div class="grid">\${PANELS.map((p) => panel(p, mine, marks, from, to)).join('')}</div>
-    <p class="note">Deploy markers are every service's deploys, not just this box's.
-      A metric with no line was not reported by this box.</p>\`;
+    <div class="grid">\${PANELS.map((p, i) => panel(p, mine, marks, from, to, i)).join('')}</div>
+    <p class="note">Times are local. Hover a chart to read the sample under the cursor.
+      Dashed lines are deploys — every service's, not just this box's — and carry the
+      version on hover.</p>\`;
+
+  wireHover(PANELS.map((p) => mine.filter((r) => typeof r[p.key] === 'number')
+    .map((r) => [r.ts, r[p.key]])), from, to, to - from);
 
   app.querySelectorAll('[data-host]').forEach((b) =>
     (b.onclick = () => { state.host = b.dataset.host; draw(hosts, deploys, range); }));
@@ -167,39 +181,125 @@ function draw(hosts, deploys, range) {
     (b.onclick = () => { state.range = +b.dataset.range; load(); }));
 }
 
-function panel(p, rows, marks, from, to) {
+// A chart with axes you can read and a value you can hover.
+//
+// The version this replaced drew a bare line and put the y minimum and maximum
+// in the bottom two corners, which is exactly where an x-axis label belongs —
+// so it read as a time range and was not one. Time now has its own labelled
+// axis along the bottom, values are labelled up the left, and moving the mouse
+// over a chart reads out the sample under the cursor.
+const M = { left: 40, right: 10, top: 8, bottom: 18 };
+const W = 320, H = 132;
+const PLOT_W = W - M.left - M.right;
+const PLOT_H = H - M.top - M.bottom;
+
+function panel(p, rows, marks, from, to, index) {
   const points = rows.filter((r) => typeof r[p.key] === 'number').map((r) => [r.ts, r[p.key]]);
   const latest = points.length ? points[points.length - 1][1] : null;
+  const unit = p.unit ? ' ' + p.unit : '';
   const head = \`<h3>\${esc(p.title)}<span class="now">\${
-    latest === null ? '—' : esc(fmt(latest)) + (p.unit ? ' ' + p.unit : '')}</span></h3>\`;
-  if (points.length < 2) return \`<div class="chart">\${head}<svg viewBox="0 0 300 78"></svg></div>\`;
+    latest === null ? '—' : esc(fmt(latest)) + unit}</span></h3>\`;
+  if (points.length < 2) {
+    return \`<div class="chart">\${head}<p class="empty">not reported by this box</p></div>\`;
+  }
 
-  const W = 300, H = 78, pad = 2;
   const values = points.map((q) => q[1]);
-  let lo = Math.min(...values), hi = Math.max(...values);
-  // A flat line should sit in the middle of its panel rather than be scaled up
-  // into dramatic-looking noise, which is what a zero-height range would do.
-  if (hi - lo < 1e-9) { hi = lo + 1; lo -= 1; }
-  const x = (t) => pad + ((t - from) / Math.max(1, to - from)) * (W - pad * 2);
-  const y = (v) => H - pad - ((v - lo) / (hi - lo)) * (H - pad * 2 - 10);
+  const min = Math.min(...values), max = Math.max(...values);
+  // A series that never moves gets a flat line across the middle and one label,
+  // rather than an invented range that makes a constant look like it varies.
+  const flat = max - min < 1e-9;
+  const lo = flat ? min - 1 : min;
+  const hi = flat ? max + 1 : max;
+
+  const x = (t) => M.left + ((t - from) / Math.max(1, to - from)) * PLOT_W;
+  const y = (v) => M.top + PLOT_H - ((v - lo) / (hi - lo)) * PLOT_H;
 
   const line = points.map((q, i) => (i ? 'L' : 'M') + x(q[0]).toFixed(1) + ' ' + y(q[1]).toFixed(1)).join(' ');
   const rules = marks.map((d) => {
     const px = x(d.started).toFixed(1);
-    return \`<line x1="\${px}" x2="\${px}" y1="0" y2="\${H - pad}" stroke="var(--deploy)"
-      stroke-width="1" stroke-dasharray="2 2" opacity="0.85"><title>\${
-      esc(d.monitor + ' ' + d.version + ' · ' + new Date(d.started * 1000).toISOString().slice(0, 16).replace('T', ' '))
-      }</title></line>\`;
+    return \`<line class="mark" x1="\${px}" x2="\${px}" y1="\${M.top}" y2="\${M.top + PLOT_H}"><title>\${
+      esc(d.monitor + ' ' + d.version + ' · ' + clock(d.started, to - from))}</title></line>\`;
   }).join('');
 
-  return \`<div class="chart">\${head}
-    <svg viewBox="0 0 \${W} \${H}" preserveAspectRatio="none">
+  // Value labels: high and low up the left, outside the plot, so they never sit
+  // on top of the line the way corner labels did.
+  const yLabels = flat
+    ? \`<text class="axis" x="\${M.left - 5}" y="\${y(min) + 3}" text-anchor="end">\${esc(fmt(min))}</text>\`
+    : [max, min].map((v) => \`<text class="axis" x="\${M.left - 5}" y="\${
+        y(v) + (v === max ? 7 : 0)}" text-anchor="end">\${esc(fmt(v))}</text>\`).join('');
+
+  const span = to - from;
+  const xLabels = [0, 0.5, 1].map((f) => {
+    const t = from + span * f;
+    return \`<text class="axis" x="\${x(t).toFixed(1)}" y="\${H - 5}" text-anchor="\${
+      f === 0 ? 'start' : f === 1 ? 'end' : 'middle'}">\${esc(clock(t, span))}</text>\`;
+  }).join('');
+
+  return \`<div class="chart" data-panel="\${index}">\${head}
+    <svg viewBox="0 0 \${W} \${H}">
+      <line class="frame" x1="\${M.left}" x2="\${M.left + PLOT_W}" y1="\${M.top + PLOT_H}" y2="\${M.top + PLOT_H}"/>
+      <line class="frame" x1="\${M.left}" x2="\${M.left}" y1="\${M.top}" y2="\${M.top + PLOT_H}"/>
       \${rules}
-      <path d="\${line}" fill="none" stroke="var(--ink)" stroke-width="1.4"
-        stroke-linejoin="round" vector-effect="non-scaling-stroke"/>
-      <text class="axis" x="0" y="\${H}">\${esc(fmt(lo))}</text>
-      <text class="axis" x="\${W}" y="\${H}" text-anchor="end">\${esc(fmt(hi))}</text>
-    </svg></div>\`;
+      <path d="\${line}" fill="none" stroke="var(--ink)" stroke-width="1.4" stroke-linejoin="round"/>
+      \${yLabels}\${xLabels}
+      <g class="cursor" style="display:none">
+        <line class="cross" y1="\${M.top}" y2="\${M.top + PLOT_H}"/>
+        <circle r="3"/>
+      </g>
+    </svg>
+    <p class="read">&nbsp;</p></div>\`;
+}
+
+// Wires up hover for every chart. One listener per chart, reading from the
+// series it was drawn with, so the number shown is the sample itself rather
+// than something interpolated off the pixels.
+function wireHover(series, from, to, span) {
+  document.querySelectorAll('.chart[data-panel]').forEach((card) => {
+    const idx = +card.dataset.panel;
+    const p = PANELS[idx];
+    const points = series[idx];
+    if (!points || points.length < 2) return;
+    const svg = card.querySelector('svg');
+    const cursor = card.querySelector('.cursor');
+    const readout = card.querySelector('.read');
+    const values = points.map((q) => q[1]);
+    const min = Math.min(...values), max = Math.max(...values);
+    const flat = max - min < 1e-9;
+    const lo = flat ? min - 1 : min, hi = flat ? max + 1 : max;
+
+    const move = (ev) => {
+      const box = svg.getBoundingClientRect();
+      const clientX = ev.touches ? ev.touches[0].clientX : ev.clientX;
+      // Back out of the rendered pixels into viewBox units, then into a time.
+      const vx = ((clientX - box.left) / box.width) * W;
+      const t = from + ((vx - M.left) / PLOT_W) * (to - from);
+      let best = points[0];
+      for (const q of points) if (Math.abs(q[0] - t) < Math.abs(best[0] - t)) best = q;
+      const px = M.left + ((best[0] - from) / Math.max(1, to - from)) * PLOT_W;
+      const py = M.top + PLOT_H - ((best[1] - lo) / (hi - lo)) * PLOT_H;
+      cursor.style.display = '';
+      cursor.querySelector('line').setAttribute('x1', px);
+      cursor.querySelector('line').setAttribute('x2', px);
+      cursor.querySelector('circle').setAttribute('cx', px);
+      cursor.querySelector('circle').setAttribute('cy', py);
+      readout.textContent = fmt(best[1]) + (p.unit ? ' ' + p.unit : '') + '  ·  ' + clock(best[0], 0);
+    };
+    const leave = () => { cursor.style.display = 'none'; readout.innerHTML = '&nbsp;'; };
+    svg.addEventListener('mousemove', move);
+    svg.addEventListener('touchmove', move);
+    svg.addEventListener('mouseleave', leave);
+  });
+}
+
+// Local time, because the person reading this is trying to line an event up
+// with their own day. A span of a week or more wants dates, not clock times;
+// a span of zero is the hover readout, which wants both.
+function clock(ts, span) {
+  const d = new Date(ts * 1000);
+  const hhmm = String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0');
+  const date = d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+  if (span === 0) return date + ' ' + hhmm;
+  return span >= 3 * 86400 ? date : hhmm;
 }
 
 function fmt(v) {
