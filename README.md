@@ -150,6 +150,7 @@ VALUES ('blip', '<sha256 of the token>', '["balloon","host:blip"]', <epoch>);
 |---|---|
 | `GET /` | the status page |
 | `GET /api/status` | same data as JSON |
+| `GET /admin` | operator dashboard: box charts with deploy markers |
 | `GET /healthz` | is the worker up |
 | `POST /beat/<id>` | record a heartbeat (service token) |
 | `POST /deploy/<id>/start` `.../end` | report a deploy (service token) |
