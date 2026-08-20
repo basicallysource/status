@@ -88,14 +88,21 @@ systemctl enable --now status-collector.service
 sleep 2
 systemctl is-active status-collector.service
 
-# The old timer's job is done. Leaving it would mean two things reporting the
-# same box, and the one nobody can see winning any disagreement.
+# The old timers' job is done. Leaving one running means two things reporting
+# the same box a minute apart, and a chart of any metric only one of them sends
+# ends up full of holes.
+#
+# Tested by the unit file existing, not by grepping `systemctl list-unit-files`:
+# under `set -o pipefail`, a `grep -q` that matches exits early, the writer gets
+# SIGPIPE, and the whole pipeline reports failure — so the condition was false
+# precisely when there WAS something to retire. Both boxes silently kept their
+# old timer through the first install because of that.
 for stale in status-host-beat balloon-status-beat; do
-  if systemctl list-unit-files | grep -q "^$stale.timer"; then
-    systemctl disable --now "$stale.timer" 2>/dev/null || true
-    rm -f "/etc/systemd/system/$stale.timer" "/etc/systemd/system/$stale.service"
-    echo "retired $stale.timer"
-  fi
+  unit="/etc/systemd/system/$stale.timer"
+  [ -e "$unit" ] || continue
+  systemctl disable --now "$stale.timer" >/dev/null 2>&1 || true
+  rm -f "$unit" "/etc/systemd/system/$stale.service"
+  echo "retired $stale.timer"
 done
 systemctl daemon-reload
 echo "installed $($BIN --version) on $HOST"
