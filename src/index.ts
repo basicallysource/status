@@ -17,6 +17,7 @@ import {
 } from './db';
 import { fmtDuration, nextState, parseMeta, probe } from './monitor';
 import { sendAlert } from './notify';
+import { faviconSvg } from './favicon';
 import { renderPage, type DayCell, type PageData, type PageMonitor } from './page';
 import type { Env, Status } from './types';
 
@@ -217,13 +218,23 @@ export default {
       return handleBeat(req, env, decodeURIComponent(path.slice(6)));
     }
     if (path === '/healthz') return json({ ok: true, service: 'basically-status' });
+    if (path === '/favicon.svg') {
+      const s = new URL(req.url).searchParams.get('s') ?? 'unknown';
+      return new Response(faviconSvg(s), {
+        headers: {
+          'content-type': 'image/svg+xml; charset=utf-8',
+          // Keyed by status in the query string, so it is safe to cache hard.
+          'cache-control': 'public, max-age=86400',
+        },
+      });
+    }
     if (path === '/api/status') return json(await buildPage(env, now()));
     if (path === '/api/tick' && req.method === 'POST') {
       return authed(req, env) ? json(await tick(env)) : json({ error: 'unauthorized' }, 401);
     }
     if (path === '/') {
       return new Response(renderPage(await buildPage(env, now())), {
-        headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'public, max-age=20' },
+        headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-cache' },
       });
     }
     return new Response('Not found', { status: 404 });

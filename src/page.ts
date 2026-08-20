@@ -90,6 +90,13 @@ const incident = (i: PageIncident, now: number) => `
   </div>
 </li>`;
 
+/** The tab has to say what is wrong without being read. */
+function pageTitle(overall: Status): string {
+  const prefix =
+    overall === 'down' ? 'Outage · ' : overall === 'degraded' ? 'Degraded · ' : '';
+  return `${prefix}${SITE.title}`;
+}
+
 export function renderPage(d: PageData): string {
   const groups = new Map<string, PageMonitor[]>();
   for (const m of d.monitors) groups.set(m.group, [...(groups.get(m.group) ?? []), m]);
@@ -98,7 +105,8 @@ export function renderPage(d: PageData): string {
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="color-scheme" content="light dark">
-<title>${esc(SITE.title)}</title>
+<title>${esc(pageTitle(d.overall))}</title>
+<link rel="icon" type="image/svg+xml" href="/favicon.svg?s=${esc(d.overall)}">
 <style>
 :root{--bg:#fbfbfa;--card:#fff;--fg:#1a1a19;--muted:#6f6f6b;--line:#e7e6e3;
   --up:#3ba55d;--degraded:#e6a817;--down:#ed4245;--unknown:#cbcac6}
@@ -161,5 +169,42 @@ a{color:inherit}
     <span>Checked every minute · updated ${esc(utc(d.now))}</span>
     <span><a href="/api/status">JSON</a></span>
   </footer>
-</main>`;
+</main>
+<script>
+// Re-fetch this same page and swap <main>, rather than re-rendering client side:
+// the server stays the only thing that knows how to draw a status.
+(function () {
+  var busy = false;
+  async function refresh() {
+    if (busy || document.hidden) return;
+    busy = true;
+    try {
+      var res = await fetch('/', { cache: 'no-store' });
+      if (!res.ok) return;
+      var doc = new DOMParser().parseFromString(await res.text(), 'text/html');
+      var next = doc.querySelector('main');
+      if (next) document.querySelector('main').replaceWith(next);
+      if (doc.title) document.title = doc.title;
+      var from = doc.querySelector('link[rel="icon"]');
+      var to = document.querySelector('link[rel="icon"]');
+      // Replace the node rather than setting href: some browsers ignore a
+      // mutated favicon href and keep painting the old icon.
+      if (from && to && from.getAttribute('href') !== to.getAttribute('href')) {
+        to.remove();
+        document.head.appendChild(from.cloneNode(true));
+      }
+    } catch (e) {
+      /* a failed refresh just leaves the last good render up */
+    } finally {
+      busy = false;
+    }
+  }
+  setInterval(refresh, 30000);
+  // Catch up immediately when the tab comes back, instead of showing something
+  // stale until the next interval.
+  document.addEventListener('visibilitychange', function () {
+    if (!document.hidden) refresh();
+  });
+})();
+</script>`;
 }
