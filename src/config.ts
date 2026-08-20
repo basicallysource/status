@@ -99,6 +99,16 @@ export const DEPLOY_TYPICAL_WINDOW = 10;
 /** Days of history the page draws. */
 export const HISTORY_DAYS = 90;
 
+/**
+ * Days of per-box samples kept.
+ *
+ * A row a minute per box is the only thing here that grows quickly, so this is
+ * shorter than the page's window on purpose. Two weeks answers "is this getting
+ * worse" and costs a few megabytes; raising it is cheap if that stops being
+ * long enough.
+ */
+export const HOST_HISTORY_DAYS = 14;
+
 export const SITE = {
   title: 'basically Status',
   url: 'https://status.basically.website',

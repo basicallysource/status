@@ -1,4 +1,4 @@
-import { HISTORY_DAYS } from './config';
+import { HISTORY_DAYS, HOST_HISTORY_DAYS } from './config';
 import type { DeployRow, DeploySource } from './deploy';
 import type { StateRow, Status } from './types';
 
@@ -59,6 +59,12 @@ CREATE TABLE IF NOT EXISTS tokens (
   last_used INTEGER
 );
 CREATE UNIQUE INDEX IF NOT EXISTS tokens_hash ON tokens (hash);
+CREATE TABLE IF NOT EXISTS host_samples (
+  host    TEXT    NOT NULL,
+  ts      INTEGER NOT NULL,
+  metrics TEXT    NOT NULL,
+  PRIMARY KEY (host, ts)
+);
 CREATE TABLE IF NOT EXISTS kv (k TEXT PRIMARY KEY, v TEXT NOT NULL);
 `;
 
@@ -281,6 +287,45 @@ export async function recentDeploys(db: D1Database, limit = 20): Promise<DeployR
 export const touchTokenStmt = (db: D1Database, name: string, ts: number) =>
   db.prepare('UPDATE tokens SET last_used = ?2 WHERE name = ?1').bind(name, ts);
 
+/**
+ * A box reporting on itself.
+ *
+ * Deliberately not a monitor: `hive-prod` the machine is not `hive` the API, and
+ * how much swap a box is using is nobody's business but ours. These are recorded
+ * and queryable, and never reach the public page.
+ */
+export const hostSampleStmt = (
+  db: D1Database,
+  host: string,
+  ts: number,
+  metrics: Record<string, unknown>,
+) =>
+  db
+    .prepare(
+      `INSERT INTO host_samples (host, ts, metrics) VALUES (?1, ?2, ?3)
+       ON CONFLICT(host, ts) DO UPDATE SET metrics = ?3`,
+    )
+    .bind(host, ts, JSON.stringify(metrics));
+
+export interface HostSample {
+  host: string;
+  ts: number;
+  metrics: string;
+}
+
+export async function hostSamples(
+  db: D1Database,
+  sinceSec: number,
+  host?: string,
+): Promise<HostSample[]> {
+  const sql = host
+    ? 'SELECT host, ts, metrics FROM host_samples WHERE ts >= ?1 AND host = ?2 ORDER BY ts DESC'
+    : 'SELECT host, ts, metrics FROM host_samples WHERE ts >= ?1 ORDER BY ts DESC';
+  const stmt = host ? db.prepare(sql).bind(sinceSec, host) : db.prepare(sql).bind(sinceSec);
+  const { results } = await stmt.all<HostSample>();
+  return results ?? [];
+}
+
 export interface DayRow {
   up: number;
   down: number;
@@ -336,6 +381,12 @@ export async function pruneOld(db: D1Database, nowSec: number): Promise<void> {
     db.prepare('DELETE FROM daily WHERE day < ?1').bind(dayKey(cutoff)),
     db.prepare('DELETE FROM incidents WHERE ended IS NOT NULL AND ended < ?1').bind(cutoff),
     db.prepare('DELETE FROM deploys WHERE started < ?1').bind(cutoff),
+    // A row a minute per box is the only table here that grows quickly, and it
+    // is kept for long enough to answer "is this getting worse" rather than for
+    // as long as the page draws.
+    db
+      .prepare('DELETE FROM host_samples WHERE ts < ?1')
+      .bind(nowSec - HOST_HISTORY_DAYS * 86400),
   ]);
 }
 

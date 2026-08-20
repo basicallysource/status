@@ -1,4 +1,4 @@
-import { HISTORY_DAYS, MONITORS, MONITOR_BY_ID } from './config';
+import { HISTORY_DAYS, HOST_HISTORY_DAYS, MONITORS, MONITOR_BY_ID } from './config';
 import { overall, syncBoard, type BoardRow } from './board';
 import {
   abandonDeployStmt,
@@ -8,6 +8,8 @@ import {
   closeIncidentStmt,
   dayKey,
   history,
+  hostSampleStmt,
+  hostSamples,
   latestDeploys,
   loadBeats,
   loadState,
@@ -265,31 +267,60 @@ const json = (body: unknown, status = 200) =>
     headers: { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' },
   });
 
+/**
+ * Metrics off a request. JSON body preferred; query params keep a shell
+ * one-liner a one-liner, which is what every reporter on a box actually is.
+ */
+async function readMetrics(req: Request): Promise<Record<string, unknown> | null> {
+  if ((req.headers.get('content-type') ?? '').includes('application/json')) {
+    const body = await req.json<Record<string, unknown>>().catch(() => null);
+    if (body) return body;
+  }
+  const q = new URL(req.url).searchParams;
+  if (![...q.keys()].length) return null;
+  const meta: Record<string, unknown> = {};
+  // An empty parameter is a shell variable that was not set, which is a claim
+  // the sender did not make — `deploying=` means no deploy, not a deploy named
+  // "". Dropping it here keeps every reader from having to re-decide.
+  for (const [k, v] of q) {
+    if (v === '') continue;
+    meta[k] = /^-?\d+(\.\d+)?$/.test(v) ? Number(v) : v;
+  }
+  return Object.keys(meta).length ? meta : null;
+}
+
+/**
+ * A box reporting on itself: load, memory, swap, uptime.
+ *
+ * Scoped as `host:<name>` rather than as a service, because a box is not a
+ * service — hive-prod runs hive, but "hive-prod is at 91% memory" is an
+ * engineering fact and "hive is down" is a customer one. Nothing posted here
+ * reaches the public page.
+ */
+async function handleHost(req: Request, env: Env, host: string): Promise<Response> {
+  if (!/^[a-z0-9][a-z0-9._-]{0,63}$/i.test(host)) return json({ error: 'bad host name' }, 400);
+  const who = await authorize(req, env, `host:${host}`);
+  if (!who) return json({ error: 'unauthorized' }, 401);
+
+  const metrics = await readMetrics(req);
+  if (!metrics) return json({ error: 'no metrics' }, 400);
+
+  const nowSec = Math.floor(Date.now() / 1000);
+  await ensureSchema(env.DB);
+  await env.DB.batch([
+    hostSampleStmt(env.DB, host, nowSec, metrics),
+    touchTokenStmt(env.DB, who, nowSec),
+  ]);
+  return json({ ok: true, host, ts: nowSec, metrics });
+}
+
 async function handleBeat(req: Request, env: Env, id: string): Promise<Response> {
   const m = MONITOR_BY_ID[id];
   if (!m || m.kind !== 'heartbeat') return json({ error: `unknown heartbeat monitor: ${id}` }, 404);
   const who = await authorize(req, env, id);
   if (!who) return json({ error: 'unauthorized' }, 401);
 
-  // JSON body preferred; query params keep a shell one-liner a one-liner.
-  let meta: Record<string, unknown> | null = null;
-  if ((req.headers.get('content-type') ?? '').includes('application/json')) {
-    meta = await req.json<Record<string, unknown>>().catch(() => null);
-  }
-  if (!meta) {
-    const q = new URL(req.url).searchParams;
-    if ([...q.keys()].length) {
-      meta = {};
-      // An empty parameter is a shell variable that was not set, which is a
-      // claim the sender did not make — `deploying=` means no deploy, not a
-      // deploy named "". Dropping it here keeps every reader from re-deciding.
-      for (const [k, v] of q) {
-        if (v === '') continue;
-        meta[k] = /^-?\d+(\.\d+)?$/.test(v) ? Number(v) : v;
-      }
-    }
-  }
-
+  const meta = await readMetrics(req);
   const nowSec = Math.floor(Date.now() / 1000);
   await ensureSchema(env.DB);
   await env.DB.batch([beatStmt(env.DB, id, nowSec, meta), touchTokenStmt(env.DB, who, nowSec)]);
@@ -352,6 +383,9 @@ export default {
     if (req.method === 'POST' && path.startsWith('/beat/')) {
       return handleBeat(req, env, decodeURIComponent(path.slice(6)));
     }
+    if (req.method === 'POST' && path.startsWith('/host/')) {
+      return handleHost(req, env, decodeURIComponent(path.slice(6)));
+    }
     if (req.method === 'POST' && path.startsWith('/deploy/')) {
       const [id, phase, ...rest] = path.slice(8).split('/');
       if (!id || rest.length || (phase !== 'start' && phase !== 'end')) {
@@ -371,6 +405,19 @@ export default {
       });
     }
     if (path === '/api/status') return json(await buildPage(env, now()));
+    if (path === '/api/hosts') {
+      // Operator-only. The public page says whether a service works; how hard a
+      // box is breathing to make that true is ours.
+      if (!isOperator(req, env)) return json({ error: 'unauthorized' }, 401);
+      const q = new URL(req.url).searchParams;
+      const hours = Math.min(Number(q.get('hours') ?? 6) || 6, HOST_HISTORY_DAYS * 24);
+      await ensureSchema(env.DB);
+      const rows = await hostSamples(env.DB, now() - hours * 3600, q.get('host') ?? undefined);
+      return json({
+        hours,
+        samples: rows.map((r) => ({ host: r.host, ts: r.ts, ...(parseMeta(r.metrics) ?? {}) })),
+      });
+    }
     if (path === '/api/tick' && req.method === 'POST') {
       // The operator credential, not a service's: running a check on demand is
       // not something any reporting machine has a reason to do.

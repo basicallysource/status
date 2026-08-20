@@ -49,11 +49,34 @@ curl -XPOST -H "Authorization: Bearer $TOKEN" \
 Deploys inferred from a heartbeat are recorded too, but their duration is an
 artefact of how often we looked, so they are kept out of the statistics.
 
+## Boxes
+
+A machine can report on itself, separately from any service it runs:
+
+```bash
+curl -XPOST -H "Authorization: Bearer $TOKEN" \
+  "https://status.basically.website/host/blip?load1=0.4&cpus=1&mem_pct=25.3&swap_pct=0&uptime_s=3010111"
+```
+
+This is recorded and never rendered. A box is not a service — whether the API
+answers is a customer's question, and how hard the machine is working to answer
+it is ours. Read it back with `GET /api/hosts?hours=6[&host=blip]`, which needs
+the operator credential.
+
+Samples are kept for `HOST_HISTORY_DAYS`, shorter than the page's window because
+a row a minute per box is the only thing here that grows quickly.
+
+Collectors read `/proc` and nothing else — no forks, no disk. Do not add anything
+that walks a filesystem: sizing directories is the one measurement on these boxes
+that costs real I/O.
+
 ## Tokens
 
-`BEAT_TOKEN` is the operator credential and authorises `POST /api/tick` only.
+`BEAT_TOKEN` is the operator credential and authorises `POST /api/tick` and
+`GET /api/hosts`.
 Everything a machine reports about a service uses a row in the `tokens` table,
-hashed and scoped to the services that machine may speak for — a credential on
+hashed and scoped to the services that machine may speak for (and to
+`host:<name>` for reporting on itself) — a credential on
 one box cannot file a fake outage, or a fake maintenance window, against a
 service on another.
 
@@ -62,7 +85,7 @@ which already requires being able to deploy this worker:
 
 ```sql
 INSERT INTO tokens (name, hash, monitors, created)
-VALUES ('blip', '<sha256 of the token>', '["balloon"]', <epoch>);
+VALUES ('blip', '<sha256 of the token>', '["balloon","host:blip"]', <epoch>);
 ```
 
 ## Routes
@@ -72,8 +95,11 @@ VALUES ('blip', '<sha256 of the token>', '["balloon"]', <epoch>);
 | `GET /` | the status page |
 | `GET /api/status` | same data as JSON |
 | `GET /healthz` | is the worker up |
-| `POST /beat/<id>` | record a heartbeat (bearer `BEAT_TOKEN`) |
-| `POST /api/tick` | run a check now (bearer `BEAT_TOKEN`) |
+| `POST /beat/<id>` | record a heartbeat (service token) |
+| `POST /deploy/<id>/start` `.../end` | report a deploy (service token) |
+| `POST /host/<name>` | record a box sample (service token, `host:<name>`) |
+| `GET /api/hosts` | box samples, not public (operator token) |
+| `POST /api/tick` | run a check now (operator token) |
 
 Heartbeats take metrics as JSON or query params. An empty value is dropped, so
 an unset shell variable says nothing rather than something wrong:
@@ -98,7 +124,7 @@ secret is missing:
 
 | | |
 |---|---|
-| `BEAT_TOKEN` | authenticates heartbeats and manual ticks |
+| `BEAT_TOKEN` | the operator credential: manual ticks and box samples |
 | `PUSH_API`, `PUSH_TOKEN` | push notification endpoint and credential |
 | `DISCORD_ALERT_WEBHOOK` | a message per state change |
 | `DISCORD_BOARD_WEBHOOK` | one message, edited in place, mirroring the page |
