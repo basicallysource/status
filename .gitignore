@@ -6,3 +6,7 @@ node_modules/
 # Internal operating notes: real hostnames, incidents, and where credentials
 # live. The rest of this repo is written to be publishable; this file is not.
 AGENTS.local.md
+
+# the collector binary, built on demand
+collector/collector
+collector/status-collector*

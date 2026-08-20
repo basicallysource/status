@@ -1,0 +1,77 @@
+name: collector
+
+# The collector ships on its own tag, separately from the worker. They are
+# deployed by different mechanisms onto different machines — the worker is a
+# `wrangler deploy`, the collector is a binary a box pulls for itself — and
+# tying them to one version would mean every page tweak asked five boxes to
+# restart.
+on:
+  push:
+    branches: [main]
+    paths: ['collector/**', '.github/workflows/collector.yml']
+    tags: ['collector-v*']
+  pull_request:
+    paths: ['collector/**', '.github/workflows/collector.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: write # to create the release the boxes pull from
+
+concurrency:
+  group: collector
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: collector
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+          cache-dependency-path: collector/go.sum
+      - run: go vet ./...
+      - run: go test ./...
+      # The formatter is the whole style argument, settled once.
+      - name: gofmt
+        run: test -z "$(gofmt -l .)" || { gofmt -l .; exit 1; }
+
+  release:
+    needs: check
+    if: startsWith(github.ref, 'refs/tags/collector-v')
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: collector
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+          cache-dependency-path: collector/go.sum
+
+      - name: build
+        run: |
+          version="${GITHUB_REF_NAME#collector-}"
+          # Static and stripped: these boxes are Debian and Ubuntu of different
+          # ages, and a binary that depends on the local libc is a binary that
+          # works until it doesn't.
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath \
+            -ldflags "-s -w -X main.version=$version" \
+            -o status-collector-linux-amd64 .
+          sha256sum status-collector-linux-amd64 > status-collector-linux-amd64.sha256
+          # The binary must agree about what it is, or a box's own smoke test
+          # will reject it after downloading — better to fail here.
+          test "$(./status-collector-linux-amd64 --version)" = "$version"
+
+      - name: publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            --title "$GITHUB_REF_NAME" \
+            --notes "status-collector ${GITHUB_REF_NAME#collector-}. Boxes running an earlier version pick this up within 30 minutes, verify the checksum, smoke-test it, and swap it in atomically." \
+            status-collector-linux-amd64 status-collector-linux-amd64.sha256
