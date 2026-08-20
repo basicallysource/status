@@ -1,22 +1,29 @@
 import { HISTORY_DAYS, MONITORS, MONITOR_BY_ID } from './config';
 import { overall, syncBoard, type BoardRow } from './board';
 import {
+  backfillDownStmt,
   beatStmt,
+  closeDeployStmt,
   closeIncidentStmt,
   dayKey,
   history,
+  latestDeploys,
   loadBeats,
   loadState,
   migrate,
+  openDeployStmt,
   openIncidentStmt,
+  pointDeployStmt,
   pruneOld,
   pruneOrphans,
+  recentDeploys,
   recentIncidents,
   tickStmts,
   type TickResult,
 } from './db';
+import { blame, deployEvents, excused } from './deploy';
 import { fmtDuration, nextState, parseMeta, probe } from './monitor';
-import { sendAlert } from './notify';
+import { sendAlert, worthAlerting } from './notify';
 import { faviconSvg } from './favicon';
 import { renderPage, type DayCell, type PageData, type PageMonitor } from './page';
 import type { Env, Status } from './types';
@@ -35,16 +42,30 @@ async function ensureSchema(db: D1Database): Promise<void> {
 
 export async function tick(env: Env, nowSec = Math.floor(Date.now() / 1000)) {
   await ensureSchema(env.DB);
-  const [state, beats] = await Promise.all([loadState(env.DB), loadBeats(env.DB)]);
+  const [state, beats, deploys] = await Promise.all([
+    loadState(env.DB),
+    loadBeats(env.DB),
+    latestDeploys(env.DB),
+  ]);
   const observations = await Promise.all(MONITORS.map((m) => probe(m, beats, nowSec)));
 
   const rows: TickResult[] = [];
-  const incidentWrites: D1PreparedStatement[] = [];
+  const writes: D1PreparedStatement[] = [];
   const alerts: { i: number; t: ReturnType<typeof nextState> }[] = [];
 
   MONITORS.forEach((m, i) => {
     const obs = observations[i];
-    const t = nextState(state[m.id], obs, nowSec);
+    const prev = state[m.id];
+    const prevMeta = parseMeta(prev?.meta ?? null);
+    const meta = obs.meta ?? prevMeta;
+
+    for (const e of deployEvents(prevMeta, obs.meta)) {
+      if (e.kind === 'opened') writes.push(openDeployStmt(env.DB, m.id, e.version, nowSec));
+      else if (e.kind === 'closed') writes.push(closeDeployStmt(env.DB, m.id, nowSec));
+      else writes.push(pointDeployStmt(env.DB, m.id, e.version, nowSec));
+    }
+
+    const t = nextState(state[m.id], obs, nowSec, excused(meta, deploys[m.id], obs, nowSec));
     rows.push({
       id: m.id,
       ts: nowSec,
@@ -54,18 +75,47 @@ export async function tick(env: Env, nowSec = Math.floor(Date.now() / 1000)) {
       fails: t.fails,
       latencyMs: obs.latencyMs,
       err: obs.err,
-      meta: obs.meta ?? parseMeta(state[m.id]?.meta ?? null),
+      meta,
     });
     if (!t.changed) return;
-    incidentWrites.push(closeIncidentStmt(env.DB, m.id, nowSec));
-    if (t.status !== 'up') incidentWrites.push(openIncidentStmt(env.DB, m.id, t.status, nowSec, obs.err));
+
+    if (t.prevStatus === 'maintenance' && t.status === 'down') {
+      // We excused these minutes as a deploy and they turned out to be an
+      // outage, so they are downtime after all. One tick is one minute. A window
+      // spanning midnight lands them all on today, which is close enough for a
+      // number that is already about a whole day.
+      const excusedMin = Math.round((nowSec - (prev?.since ?? nowSec)) / 60);
+      if (excusedMin > 0) writes.push(backfillDownStmt(env.DB, m.id, nowSec, excusedMin));
+    }
+
+    if (t.status === 'down' || t.status === 'degraded') {
+      writes.push(closeIncidentStmt(env.DB, m.id, nowSec));
+      writes.push(
+        openIncidentStmt(
+          env.DB,
+          m.id,
+          t.status,
+          // An outage we spent time excusing began when we started excusing it,
+          // not when we gave up on the excuse.
+          t.prevStatus === 'maintenance' ? (prev?.since ?? nowSec) : nowSec,
+          obs.err,
+          blame(meta, deploys[m.id], nowSec),
+        ),
+      );
+    } else if (t.status === 'up') {
+      writes.push(closeIncidentStmt(env.DB, m.id, nowSec));
+    }
+    // A move into maintenance opens no incident: a deploy is not an incident
+    // unless it overruns, and that transition is handled above.
     alerts.push({ i, t });
   });
 
-  await env.DB.batch([...tickStmts(env.DB, rows), ...incidentWrites]);
+  await env.DB.batch([...tickStmts(env.DB, rows), ...writes]);
 
   await Promise.allSettled(
-    alerts.map(({ i, t }) => sendAlert(env, MONITORS[i], t, observations[i], nowSec)),
+    alerts
+      .filter(({ t }) => worthAlerting(t))
+      .map(({ i, t }) => sendAlert(env, MONITORS[i], t, observations[i], nowSec)),
   );
 
   const board: BoardRow[] = rows.map((r, i) => ({
@@ -99,12 +149,21 @@ async function withUptime(env: Env, board: BoardRow[], nowSec: number): Promise<
   });
 }
 
-/** "service active · disk 55%" — a heartbeat's metrics, in a readable line. */
+/** The keys a service reports about its own deploys read as English rather than
+ *  as field names. Everything else is `key value`. */
+const META_PHRASE: Record<string, (v: unknown) => string> = {
+  version: (v) => `on ${v}`,
+  deploying: (v) => `deploying ${v}`,
+};
+
+/** "service active · disk 55% · on r2026.08.20-3" — a heartbeat's metrics. */
 export function describeMeta(meta: Record<string, unknown> | null): string | null {
   if (!meta) return null;
   const parts = Object.entries(meta)
     .filter(([, v]) => v !== null && v !== undefined && v !== '')
-    .map(([k, v]) => (k.endsWith('_pct') ? `${k.slice(0, -4)} ${v}%` : `${k} ${v}`));
+    .map(([k, v]) =>
+      META_PHRASE[k] ? META_PHRASE[k](v) : k.endsWith('_pct') ? `${k.slice(0, -4)} ${v}%` : `${k} ${v}`,
+    );
   return parts.length ? parts.join(' · ') : null;
 }
 
@@ -117,10 +176,11 @@ function dayCell(day: string, up: number, down: number): DayCell {
 
 async function buildPage(env: Env, nowSec: number): Promise<PageData> {
   await ensureSchema(env.DB);
-  const [state, hist, incidents] = await Promise.all([
+  const [state, hist, incidents, deploys] = await Promise.all([
     loadState(env.DB),
     history(env.DB, dayKey(nowSec - HISTORY_DAYS * 86400)),
     recentIncidents(env.DB, 15),
+    recentDeploys(env.DB, 20),
   ]);
 
   const monitors: PageMonitor[] = MONITORS.map((m) => {
@@ -138,9 +198,13 @@ async function buildPage(env: Env, nowSec: number): Promise<PageData> {
     }
     const status: Status = s?.status ?? 'unknown';
     const detail =
-      status !== 'up'
-        ? (s?.last_err ?? '')
-        : s?.last_latency_ms != null
+      status === 'maintenance'
+        ? // What is happening, not what is failing: mid-deploy, "service
+          // activating" is the symptom and the deploy is the news.
+          (describeMeta(parseMeta(s?.meta ?? null)) ?? 'A new version is being installed')
+        : status !== 'up'
+          ? (s?.last_err ?? '')
+          : s?.last_latency_ms != null
           ? `Responding in ${s.last_latency_ms}ms`
           : // A heartbeat has no latency, but it usually carries metrics. Showing
             // them lets a disk be watched climbing rather than only alerted on.
@@ -168,6 +232,13 @@ async function buildPage(env: Env, nowSec: number): Promise<PageData> {
       started: i.started,
       ended: i.ended,
       detail: i.detail,
+      deploy: i.deploy,
+    })),
+    deploys: deploys.map((d) => ({
+      name: MONITOR_BY_ID[d.monitor]?.name ?? d.monitor,
+      version: d.version,
+      started: d.started,
+      ended: d.ended,
     })),
   };
 }
@@ -195,7 +266,13 @@ async function handleBeat(req: Request, env: Env, id: string): Promise<Response>
     const q = new URL(req.url).searchParams;
     if ([...q.keys()].length) {
       meta = {};
-      for (const [k, v] of q) meta[k] = /^-?\d+(\.\d+)?$/.test(v) ? Number(v) : v;
+      // An empty parameter is a shell variable that was not set, which is a
+      // claim the sender did not make — `deploying=` means no deploy, not a
+      // deploy named "". Dropping it here keeps every reader from re-deciding.
+      for (const [k, v] of q) {
+        if (v === '') continue;
+        meta[k] = /^-?\d+(\.\d+)?$/.test(v) ? Number(v) : v;
+      }
     }
   }
 

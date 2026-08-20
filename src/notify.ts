@@ -5,20 +5,45 @@ export const COLOR: Record<Status, number> = {
   up: 0x3ba55d,
   degraded: 0xe6a817,
   down: 0xed4245,
+  maintenance: 0x4c6ef5,
   unknown: 0x9a9a95,
 };
 
-export const ICON: Record<Status, string> = { up: '🟢', degraded: '🟡', down: '🔴', unknown: '⚪' };
+export const ICON: Record<Status, string> = {
+  up: '🟢',
+  degraded: '🟡',
+  down: '🔴',
+  maintenance: '🔵',
+  unknown: '⚪',
+};
 
 export function alertText(m: Monitor, t: Transition, obs: Observation, nowSec: number) {
   if (t.status === 'up') {
     const label = t.prevStatus === 'degraded' ? 'degraded' : 'down';
-    const dur = fmtDuration(nowSec - t.since);
+    const dur = fmtDuration(nowSec - t.prevSince);
     return { title: `${m.name} recovered`, body: `Back up after ${dur} ${label}.` };
+  }
+  if (t.prevStatus === 'maintenance' && t.status === 'down') {
+    // The loud one. An update that has not finished is a worse sign than a
+    // service that simply fell over, because something is half-installed.
+    return {
+      title: `${m.name} is down — update has overrun`,
+      body: `Still not answering ${fmtDuration(nowSec - t.prevSince)} after an update began. ${
+        obs.err ?? ''
+      }`.trim(),
+    };
   }
   const verb = t.status === 'degraded' ? 'is degraded' : 'is down';
   return { title: `${m.name} ${verb}`, body: obs.err ?? verb };
 }
+
+/**
+ * A routine deploy is not news. Balloon ships several times a day, and a phone
+ * that buzzes for each one is a phone that gets ignored on the day it matters.
+ * The overrun is still alerted, loudly — see alertText.
+ */
+export const worthAlerting = (t: Transition): boolean =>
+  t.status !== 'maintenance' && !(t.prevStatus === 'maintenance' && t.status === 'up');
 
 async function post(url: string, init: RequestInit, label: string): Promise<void> {
   const res = await fetch(url, init);

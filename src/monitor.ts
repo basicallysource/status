@@ -1,4 +1,4 @@
-import { FAILURES_BEFORE_DOWN } from './config';
+import { FAILURES_BEFORE_DOWN, MAINTENANCE_MAX_SEC } from './config';
 import type {
   HeartbeatMonitor,
   HttpMonitor,
@@ -86,7 +86,14 @@ export function probeHeartbeat(
   const age = nowSec - beat.ts;
   const staleAfter = m.staleAfterSec ?? 600;
   if (age > staleAfter) {
-    return { ok: false, latencyMs: null, code: null, err: `silent for ${fmtDuration(age)}`, meta };
+    return {
+      ok: false,
+      stale: true,
+      latencyMs: null,
+      code: null,
+      err: `silent for ${fmtDuration(age)}`,
+      meta,
+    };
   }
   const problems = checkThresholds(m, meta);
   if (!problems.length) return { ok: true, latencyMs: null, code: null, err: null, meta };
@@ -103,8 +110,19 @@ export const probe = (m: Monitor, beats: Record<string, { ts: number; meta: stri
 /**
  * Flap guard: one failed probe does not move a healthy service to down. A status
  * page that cries wolf is worse than none, and the cost is a single minute.
+ *
+ * `excused` says a deploy the service told us about could account for this
+ * failure. It is honoured for MAINTENANCE_MAX_SEC and then stops being
+ * honoured, so the worst a service can do by claiming a deploy forever is delay
+ * its own outage by five minutes. It never suppresses a degraded state either:
+ * a disk filling up during a deploy is still a disk filling up.
  */
-export function nextState(prev: StateRow | undefined, obs: Observation, nowSec: number): Transition {
+export function nextState(
+  prev: StateRow | undefined,
+  obs: Observation,
+  nowSec: number,
+  excused = false,
+): Transition {
   const prevStatus: Status = prev?.status ?? 'unknown';
   let fails = prev?.fails ?? 0;
   let status: Status;
@@ -114,12 +132,24 @@ export function nextState(prev: StateRow | undefined, obs: Observation, nowSec: 
     status = obs.degraded ? 'degraded' : 'up';
   } else {
     fails += 1;
-    const settled = prevStatus === 'up' || prevStatus === 'degraded';
+    const settled = prevStatus === 'up' || prevStatus === 'degraded' || prevStatus === 'maintenance';
     status = fails >= FAILURES_BEFORE_DOWN || !settled ? 'down' : prevStatus;
   }
 
+  // Not from `down`: a deploy onto something that was already broken does not
+  // get to reclassify the outage already in progress as routine.
+  if (excused && status === 'down' && prevStatus !== 'down') {
+    // Measured from when we started excusing, not from when the deploy was
+    // announced: an install that waits politely for a running job to finish can
+    // hold its window open for a long time while perfectly healthy, and that
+    // patience should not spend the outage budget.
+    const held = prevStatus === 'maintenance' ? (prev?.since ?? nowSec) : nowSec;
+    if (nowSec - held < MAINTENANCE_MAX_SEC) status = 'maintenance';
+  }
+
   const changed = status !== prevStatus;
-  return { status, since: changed ? nowSec : prev?.since ?? nowSec, fails, changed, prevStatus };
+  const prevSince = prev?.since ?? nowSec;
+  return { status, since: changed ? nowSec : prevSince, fails, changed, prevStatus, prevSince };
 }
 
 export function parseMeta(raw: string | null): Record<string, unknown> | null {

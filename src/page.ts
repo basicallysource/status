@@ -29,6 +29,14 @@ export interface PageIncident {
   started: number;
   ended: number | null;
   detail: string | null;
+  deploy: string | null;
+}
+
+export interface PageDeploy {
+  name: string;
+  version: string;
+  started: number;
+  ended: number | null;
 }
 
 export interface PageData {
@@ -36,12 +44,14 @@ export interface PageData {
   overall: Status;
   monitors: PageMonitor[];
   incidents: PageIncident[];
+  deploys: PageDeploy[];
 }
 
 const LABEL: Record<Status, string> = {
   up: 'Operational',
   degraded: 'Degraded',
   down: 'Outage',
+  maintenance: 'Updating',
   unknown: 'No data',
 };
 
@@ -76,7 +86,13 @@ const row = (m: PageMonitor, now: number) => `
     <span>${m.uptime.toFixed(2)} % uptime</span>
     <span>Today</span>
   </div>
-  ${m.detail ? `<div class="detail ${m.status === 'up' ? '' : 'bad'}">${esc(m.detail)}</div>` : ''}
+  ${
+    m.detail
+      ? `<div class="detail ${m.status === 'down' || m.status === 'degraded' ? 'bad' : ''}">${esc(
+          m.detail,
+        )}</div>`
+      : ''
+  }
 </section>`;
 
 const incident = (i: PageIncident, now: number) => `
@@ -86,14 +102,24 @@ const incident = (i: PageIncident, now: number) => `
     <div><strong>${esc(i.name)}</strong> — ${LABEL[i.status]} for ${esc(
       fmtDuration((i.ended ?? now) - i.started),
     )}${i.ended ? '' : ' <em>(ongoing)</em>'}</div>
-    <div class="sub">${esc(utc(i.started))}${i.detail ? ` · ${esc(i.detail)}` : ''}</div>
+    <div class="sub">${esc(utc(i.started))}${i.detail ? ` · ${esc(i.detail)}` : ''}${
+      // "during", never "because of". We know these coincided; we do not know
+      // one caused the other, and a status page should not guess in public.
+      i.deploy ? ` · during the ${esc(i.deploy)} update` : ''
+    }</div>
   </div>
 </li>`;
 
 /** The tab has to say what is wrong without being read. */
 function pageTitle(overall: Status): string {
   const prefix =
-    overall === 'down' ? 'Outage · ' : overall === 'degraded' ? 'Degraded · ' : '';
+    overall === 'down'
+      ? 'Outage · '
+      : overall === 'degraded'
+        ? 'Degraded · '
+        : overall === 'maintenance'
+          ? 'Updating · '
+          : '';
   return `${prefix}${SITE.title}`;
 }
 
@@ -109,9 +135,10 @@ export function renderPage(d: PageData): string {
 <link rel="icon" type="image/svg+xml" href="/favicon.svg?s=${esc(d.overall)}">
 <style>
 :root{--bg:#fbfbfa;--card:#fff;--fg:#1a1a19;--muted:#6f6f6b;--line:#e7e6e3;
-  --up:#3ba55d;--degraded:#e6a817;--down:#ed4245;--unknown:#cbcac6}
+  --up:#3ba55d;--degraded:#e6a817;--down:#ed4245;--maintenance:#4c6ef5;--unknown:#cbcac6}
 @media(prefers-color-scheme:dark){:root{--bg:#131312;--card:#1c1c1a;--fg:#eee;--muted:#9a9a95;
-  --line:#2e2e2b;--up:#46c46e;--degraded:#f0b429;--down:#f2585b;--unknown:#46463f}}
+  --line:#2e2e2b;--up:#46c46e;--degraded:#f0b429;--down:#f2585b;--maintenance:#6b8afd;
+  --unknown:#46463f}}
 *{box-sizing:border-box}
 body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.5 ui-sans-serif,-apple-system,
   "Segoe UI",Inter,system-ui,sans-serif;-webkit-font-smoothing:antialiased}
@@ -124,6 +151,7 @@ h2{font-size:12px;font-weight:600;letter-spacing:.04em;
 .banner{padding:16px 20px;border-radius:10px;font-weight:600;color:#fff;margin-bottom:28px}
 .banner.up{background:var(--up)}.banner.degraded{background:var(--degraded)}
 .banner.down{background:var(--down)}.banner.unknown{background:var(--unknown)}
+.banner.maintenance{background:var(--maintenance)}
 .card{background:var(--card);border:1px solid var(--line);border-radius:10px;
   padding:16px 18px;margin-bottom:10px}
 .head{display:flex;justify-content:space-between;align-items:flex-start;gap:16px}
@@ -134,6 +162,7 @@ h2{font-size:12px;font-weight:600;letter-spacing:.04em;
    white text green, on a green background. */
 .right .up{color:var(--up)}.right .degraded{color:var(--degraded)}
 .right .down{color:var(--down)}.right .unknown{color:var(--muted)}
+.right .maintenance{color:var(--maintenance)}
 .bars{display:flex;gap:2px;height:30px;margin:14px 0 6px}
 .b{flex:1;min-width:2px;border-radius:2px;background:var(--unknown)}
 .b.up{background:var(--up)}.b.degraded{background:var(--degraded)}.b.down{background:var(--down)}

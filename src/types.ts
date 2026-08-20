@@ -1,4 +1,7 @@
-export type Status = 'up' | 'degraded' | 'down' | 'unknown';
+// `maintenance` is a service that would otherwise read as down, while a deploy
+// it told us about is in flight. It is a claim by the thing being watched, so
+// it is time-boxed everywhere it is honoured — see MAINTENANCE_MAX_SEC.
+export type Status = 'up' | 'degraded' | 'down' | 'maintenance' | 'unknown';
 
 /**
  * A metric carried on a heartbeat becomes a degraded state when it crosses a
@@ -37,6 +40,9 @@ export type Monitor = HttpMonitor | HeartbeatMonitor;
 export interface Observation {
   ok: boolean;
   degraded?: boolean;
+  /** We have heard nothing recently. Never excusable as maintenance: a box that
+   *  went silent mid-deploy is the failure you most need to see. */
+  stale?: boolean;
   latencyMs: number | null;
   code: number | null;
   err: string | null;
@@ -49,6 +55,10 @@ export interface Transition {
   fails: number;
   changed: boolean;
   prevStatus: Status;
+  /** When the status we are leaving began. `since` is no use for this: a
+   *  transition resets it to now, so "down for how long" has to be measured
+   *  against the state being left, not the one being entered. */
+  prevSince: number;
 }
 
 export interface StateRow {

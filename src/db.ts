@@ -1,4 +1,5 @@
 import { HISTORY_DAYS } from './config';
+import type { DeployRow } from './deploy';
 import type { StateRow, Status } from './types';
 
 // Four tables, each earning its place: where things stand, when a beat last
@@ -36,12 +37,32 @@ CREATE TABLE IF NOT EXISTS incidents (
   ended   INTEGER,
   detail  TEXT
 );
+CREATE TABLE IF NOT EXISTS deploys (
+  id      INTEGER PRIMARY KEY AUTOINCREMENT,
+  monitor TEXT    NOT NULL,
+  version TEXT    NOT NULL,
+  started INTEGER NOT NULL,
+  ended   INTEGER
+);
+CREATE INDEX IF NOT EXISTS deploys_recent ON deploys (monitor, started DESC);
 CREATE TABLE IF NOT EXISTS kv (k TEXT PRIMARY KEY, v TEXT NOT NULL);
 `;
+
+// SQLite has no ADD COLUMN IF NOT EXISTS, and on every deploy after the first
+// the column is already there. That is the ordinary case, not an error.
+const ADDITIONS = ['ALTER TABLE incidents ADD COLUMN deploy TEXT'];
 
 export async function migrate(db: D1Database): Promise<void> {
   const stmts = SCHEMA.split(';').map((s) => s.trim()).filter(Boolean);
   await db.batch(stmts.map((s) => db.prepare(s)));
+  for (const sql of ADDITIONS) {
+    await db
+      .prepare(sql)
+      .run()
+      .catch((e) => {
+        if (!/duplicate column/i.test(String(e))) throw e;
+      });
+  }
 }
 
 export const dayKey = (tsSec: number): string => new Date(tsSec * 1000).toISOString().slice(0, 10);
@@ -87,17 +108,34 @@ export interface TickResult {
   meta: Record<string, unknown> | null;
 }
 
+/** Adds minutes to a day's down count, for time that was excused as a deploy
+ *  and later turned out to be an outage. */
+export const backfillDownStmt = (db: D1Database, monitor: string, ts: number, minutes: number) =>
+  db
+    .prepare(
+      `INSERT INTO daily (monitor, day, up, down) VALUES (?1, ?2, 0, ?3)
+       ON CONFLICT(monitor, day) DO UPDATE SET down = down + ?3`,
+    )
+    .bind(monitor, dayKey(ts), minutes);
+
 /** One tick of writes, batched into a single round trip. */
 export function tickStmts(db: D1Database, rows: TickResult[]): D1PreparedStatement[] {
   const out: D1PreparedStatement[] = [];
   for (const r of rows) {
+    // Maintenance counts as neither. Uptime should not be flattered by a deploy,
+    // and should not be punished by one either — if the deploy turns out to have
+    // been an outage, backfillDownStmt puts those minutes back as down.
+    if (r.status !== 'maintenance') {
+      out.push(
+        db
+          .prepare(
+            `INSERT INTO daily (monitor, day, up, down) VALUES (?1, ?2, ?3, ?4)
+             ON CONFLICT(monitor, day) DO UPDATE SET up = up + ?3, down = down + ?4`,
+          )
+          .bind(r.id, dayKey(r.ts), r.ok ? 1 : 0, r.ok ? 0 : 1),
+      );
+    }
     out.push(
-      db
-        .prepare(
-          `INSERT INTO daily (monitor, day, up, down) VALUES (?1, ?2, ?3, ?4)
-           ON CONFLICT(monitor, day) DO UPDATE SET up = up + ?3, down = down + ?4`,
-        )
-        .bind(r.id, dayKey(r.ts), r.ok ? 1 : 0, r.ok ? 0 : 1),
       db
         .prepare(
           `INSERT INTO state (monitor, status, since, fails, last_ts, last_err, last_latency_ms, meta)
@@ -134,10 +172,53 @@ export const openIncidentStmt = (
   status: Status,
   ts: number,
   detail: string | null,
+  deploy: string | null = null,
 ) =>
   db
-    .prepare('INSERT INTO incidents (monitor, status, started, detail) VALUES (?1,?2,?3,?4)')
-    .bind(monitor, status, ts, detail);
+    .prepare(
+      'INSERT INTO incidents (monitor, status, started, detail, deploy) VALUES (?1,?2,?3,?4,?5)',
+    )
+    .bind(monitor, status, ts, detail, deploy);
+
+export const openDeployStmt = (db: D1Database, monitor: string, version: string, ts: number) =>
+  db
+    .prepare('INSERT INTO deploys (monitor, version, started, ended) VALUES (?1,?2,?3,NULL)')
+    .bind(monitor, version, ts);
+
+/** A deploy that began and finished between two reports. Minute resolution is
+ *  the honest answer, and better than no record of it at all. */
+export const pointDeployStmt = (db: D1Database, monitor: string, version: string, ts: number) =>
+  db
+    .prepare('INSERT INTO deploys (monitor, version, started, ended) VALUES (?1,?2,?3,?3)')
+    .bind(monitor, version, ts);
+
+export const closeDeployStmt = (db: D1Database, monitor: string, ts: number) =>
+  db
+    .prepare(
+      `UPDATE deploys SET ended = ?2 WHERE id =
+        (SELECT id FROM deploys WHERE monitor = ?1 AND ended IS NULL ORDER BY started DESC LIMIT 1)`,
+    )
+    .bind(monitor, ts);
+
+/** The most recent deploy per monitor, which is the only one a tick asks about. */
+export async function latestDeploys(db: D1Database): Promise<Record<string, DeployRow>> {
+  const { results } = await db
+    .prepare(
+      `SELECT d.monitor, d.version, d.started, d.ended FROM deploys d
+       JOIN (SELECT monitor, MAX(started) AS started FROM deploys GROUP BY monitor) m
+         ON m.monitor = d.monitor AND m.started = d.started`,
+    )
+    .all<DeployRow>();
+  return Object.fromEntries((results ?? []).map((r) => [r.monitor, r]));
+}
+
+export async function recentDeploys(db: D1Database, limit = 20): Promise<DeployRow[]> {
+  const { results } = await db
+    .prepare('SELECT monitor, version, started, ended FROM deploys ORDER BY started DESC LIMIT ?1')
+    .bind(limit)
+    .all<DeployRow>();
+  return results ?? [];
+}
 
 export interface DayRow {
   up: number;
@@ -164,6 +245,9 @@ export interface IncidentRow {
   started: number;
   ended: number | null;
   detail: string | null;
+  /** The version being deployed when this started, if one was. Correlation —
+   *  the page says "during", never "because of". */
+  deploy: string | null;
 }
 
 export async function recentIncidents(db: D1Database, limit = 15): Promise<IncidentRow[]> {
@@ -190,6 +274,7 @@ export async function pruneOld(db: D1Database, nowSec: number): Promise<void> {
   await db.batch([
     db.prepare('DELETE FROM daily WHERE day < ?1').bind(dayKey(cutoff)),
     db.prepare('DELETE FROM incidents WHERE ended IS NOT NULL AND ended < ?1').bind(cutoff),
+    db.prepare('DELETE FROM deploys WHERE started < ?1').bind(cutoff),
   ]);
 }
 
@@ -202,7 +287,7 @@ export async function pruneOld(db: D1Database, nowSec: number): Promise<void> {
 export async function pruneOrphans(db: D1Database, knownIds: string[]): Promise<void> {
   const ph = knownIds.map((_, i) => `?${i + 1}`).join(',') || "''";
   await db.batch(
-    ['state', 'beats', 'daily', 'incidents'].map((t) =>
+    ['state', 'beats', 'daily', 'incidents', 'deploys'].map((t) =>
       db.prepare(`DELETE FROM ${t} WHERE monitor NOT IN (${ph})`).bind(...knownIds),
     ),
   );

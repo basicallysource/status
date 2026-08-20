@@ -18,6 +18,27 @@ Edit `src/config.ts`. Nothing else. Two kinds:
 Descriptions show up on the public page, so write them for whoever is checking
 whether the thing they use is broken.
 
+## Deploys
+
+A service can report the version it is running and the version it is installing,
+as ordinary heartbeat metrics named `version` and `deploying`. Both are
+optional and neither needs a new endpoint or credential.
+
+Reporting them buys two things. Deploys land in a table with a start and an end,
+so an incident can say which update was in flight when it began. And a service
+that stops answering while it says it is deploying reads as **Updating** rather
+than as an outage, and does not alert.
+
+That second one is a service asking not to be alerted on, so it expires on our
+clock. It is honoured for `MAINTENANCE_MAX_SEC`, after which the service is down
+and the alert is louder than an ordinary one. It never covers silence, and never
+covers a degraded metric. Time excused and later judged an outage is added back
+to that day's downtime.
+
+Resolution is the reporting interval — a deploy shorter than one beat is
+recorded as a point in time. For exact durations a service would have to report
+its own start and end.
+
 ## Routes
 
 | Route | |
@@ -28,12 +49,15 @@ whether the thing they use is broken.
 | `POST /beat/<id>` | record a heartbeat (bearer `BEAT_TOKEN`) |
 | `POST /api/tick` | run a check now (bearer `BEAT_TOKEN`) |
 
-Heartbeats take metrics as JSON or query params:
+Heartbeats take metrics as JSON or query params. An empty value is dropped, so
+an unset shell variable says nothing rather than something wrong:
 
 ```bash
 curl -XPOST -H "Authorization: Bearer $TOKEN" \
-  "https://status.basically.website/beat/<id>?service=active&disk_pct=53"
+  "https://status.basically.website/beat/<id>?service=active&disk_pct=53&version=r1"
 ```
+
+`beats/` holds the reporting scripts that run on the boxes.
 
 ## Developing
 

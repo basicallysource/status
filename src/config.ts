@@ -63,6 +63,25 @@ export const MONITOR_BY_ID: Record<string, Monitor> = Object.fromEntries(
 /** Consecutive failures before we call it down. One is too jumpy to trust. */
 export const FAILURES_BEFORE_DOWN = 2;
 
+/**
+ * The longest a declared deploy may keep a service off the outage list.
+ *
+ * This number is the whole safety of the feature: a service telling us it is
+ * deploying is a service asking not to be alerted on, so the answer has to
+ * expire on our clock rather than theirs. Balloon restarts in about 30 seconds
+ * and rolls itself back inside another 30, so anything past five minutes is a
+ * deploy that went wrong — which is an outage, and gets alerted as one.
+ */
+export const MAINTENANCE_MAX_SEC = 300;
+
+/**
+ * How long after a deploy lands its failures are still its fault.
+ *
+ * The gap between "the installer is finished" and "the process answers again"
+ * is real, and the pending flag is already cleared inside it.
+ */
+export const DEPLOY_GRACE_SEC = 120;
+
 /** Days of history the page draws. */
 export const HISTORY_DAYS = 90;
 

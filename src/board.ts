@@ -16,12 +16,16 @@ const LABEL: Record<Status, string> = {
   up: 'Operational',
   degraded: 'Degraded',
   down: 'Outage',
+  maintenance: 'Updating',
   unknown: 'No data',
 };
 
 export function overall(rows: { status: Status }[]): Status {
   if (rows.some((r) => r.status === 'down')) return 'down';
   if (rows.some((r) => r.status === 'degraded')) return 'degraded';
+  // Below both, and above up: a service being updated is worth saying out loud,
+  // but it is not a reason to paint the page as if something were wrong.
+  if (rows.some((r) => r.status === 'maintenance')) return 'maintenance';
   if (rows.length && rows.every((r) => r.status === 'unknown')) return 'unknown';
   return 'up';
 }
@@ -33,7 +37,9 @@ export function headline(status: Status): string {
       ? 'Degraded performance'
       : status === 'down'
         ? 'Active outage'
-        : 'Waiting for first checks';
+        : status === 'maintenance'
+          ? 'Update in progress'
+          : 'Waiting for first checks';
 }
 
 /** The page, as one Discord message. Deliberately excludes any clock so an

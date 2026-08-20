@@ -11,6 +11,7 @@ const DOT: Record<string, string> = {
   up: '#3ba55d',
   degraded: '#e6a817',
   down: '#ed4245',
+  maintenance: '#4c6ef5',
   unknown: '#9a9a95',
 };
 

@@ -1,8 +1,20 @@
 import { describe, expect, it } from 'vitest';
 import { checkThresholds, fmtDuration, nextState, probeHeartbeat, probeHttp } from '../src/monitor';
 import { overall, renderBoard } from '../src/board';
+import { deployEvents, excused } from '../src/deploy';
+import { alertText, worthAlerting } from '../src/notify';
+import { MAINTENANCE_MAX_SEC } from '../src/config';
 import { describeMeta } from '../src/index';
-import type { HeartbeatMonitor, HttpMonitor, Observation, StateRow } from '../src/types';
+import type {
+  HeartbeatMonitor,
+  HttpMonitor,
+  Monitor,
+  Observation,
+  StateRow,
+  Transition,
+} from '../src/types';
+
+const mon: Monitor = { id: 'x', name: 'Balloon', kind: 'heartbeat' };
 
 const state = (over: Partial<StateRow>): StateRow => ({
   monitor: 'x',
@@ -180,8 +192,161 @@ describe('describeMeta', () => {
     expect(describeMeta({ service: 'active', disk_pct: 55 })).toBe('service active · disk 55%');
   });
 
+  it('phrases the deploy keys as English', () => {
+    expect(describeMeta({ version: 'r1', deploying: 'r2' })).toBe('on r1 · deploying r2');
+  });
+
   it('is null when there is nothing to say', () => {
     expect(describeMeta(null)).toBeNull();
     expect(describeMeta({})).toBeNull();
+  });
+});
+
+describe('deploy events', () => {
+  it('opens a window when a service starts reporting one', () => {
+    expect(deployEvents({ version: 'r1' }, { version: 'r1', deploying: 'r2' })).toEqual([
+      { kind: 'opened', version: 'r2' },
+    ]);
+  });
+
+  it('closes it when the service stops reporting one', () => {
+    expect(deployEvents({ version: 'r1', deploying: 'r2' }, { version: 'r2' })).toEqual([
+      { kind: 'closed' },
+    ]);
+  });
+
+  it('closes the old window before opening a different one', () => {
+    expect(deployEvents({ deploying: 'r2' }, { deploying: 'r3' })).toEqual([
+      { kind: 'closed' },
+      { kind: 'opened', version: 'r3' },
+    ]);
+  });
+
+  it('records a deploy that began and ended between two reports', () => {
+    expect(deployEvents({ version: 'r1' }, { version: 'r2' })).toEqual([
+      { kind: 'missed', version: 'r2' },
+    ]);
+  });
+
+  it('does not call the first sighting of a version a deploy', () => {
+    expect(deployEvents(null, { version: 'r1' })).toEqual([]);
+    expect(deployEvents({}, { version: 'r1' })).toEqual([]);
+  });
+
+  it('treats an empty value as no claim at all', () => {
+    expect(deployEvents({ deploying: 'r2' }, { deploying: '' })).toEqual([{ kind: 'closed' }]);
+    expect(deployEvents({}, { deploying: '' })).toEqual([]);
+  });
+
+  it('stays quiet when nothing changed', () => {
+    const same = { version: 'r1', deploying: 'r2' };
+    expect(deployEvents(same, { ...same })).toEqual([]);
+  });
+});
+
+describe('what a declared deploy may excuse', () => {
+  const beat = { stale: false };
+  const done = (ended: number) => ({ monitor: 'x', version: 'r2', started: ended - 30, ended });
+
+  it('excuses a failure while the deploy is being reported', () => {
+    expect(excused({ deploying: 'r2' }, undefined, beat, 5000)).toBe(true);
+  });
+
+  it('keeps excusing briefly after the deploy finishes', () => {
+    expect(excused({ version: 'r2' }, done(4990), beat, 5000)).toBe(true);
+  });
+
+  it('stops once the grace is spent', () => {
+    expect(excused({ version: 'r2' }, done(4000), beat, 5000)).toBe(false);
+  });
+
+  it('never excuses silence — a box that died mid-deploy is the worst case', () => {
+    expect(excused({ deploying: 'r2' }, undefined, { stale: true }, 5000)).toBe(false);
+  });
+
+  it('excuses nothing when no deploy was ever reported', () => {
+    expect(excused({ version: 'r2' }, undefined, beat, 5000)).toBe(false);
+  });
+});
+
+describe('maintenance is time-boxed', () => {
+  it('holds a deploying service out of the outage list', () => {
+    const t = nextState(state({ status: 'up', fails: 1 }), bad, 2000, true);
+    expect(t.status).toBe('maintenance');
+    expect(t.changed).toBe(true);
+  });
+
+  it('gives up on the excuse and calls it down', () => {
+    const began = 2000;
+    const t = nextState(
+      state({ status: 'maintenance', since: began, fails: 5 }),
+      bad,
+      began + MAINTENANCE_MAX_SEC,
+      true,
+    );
+    expect(t.status).toBe('down');
+    expect(t.changed).toBe(true);
+    // The outage is dated from when we started excusing it, not from now.
+    expect(t.prevSince).toBe(began);
+  });
+
+  it('still calls it down one second before the cap', () => {
+    const t = nextState(
+      state({ status: 'maintenance', since: 2000, fails: 5 }),
+      bad,
+      2000 + MAINTENANCE_MAX_SEC - 1,
+      true,
+    );
+    expect(t.status).toBe('maintenance');
+  });
+
+  it('does not launder an outage that was already in progress', () => {
+    const t = nextState(state({ status: 'down', since: 1000, fails: 9 }), bad, 2000, true);
+    expect(t.status).toBe('down');
+  });
+
+  it('does not hide a degraded metric — a disk fills up during deploys too', () => {
+    const warn: Observation = { ok: true, degraded: true, latencyMs: null, code: null, err: 'disk at 90%' };
+    const t = nextState(state({ status: 'up' }), warn, 2000, true);
+    expect(t.status).toBe('degraded');
+  });
+
+  it('recovers straight to up when the deploy lands', () => {
+    const t = nextState(state({ status: 'maintenance', since: 2000 }), good, 2100);
+    expect(t.status).toBe('up');
+    expect(t.changed).toBe(true);
+  });
+});
+
+describe('what is worth waking someone for', () => {
+  const t = (over: Partial<Transition>): Transition => ({
+    status: 'down',
+    since: 2000,
+    prevSince: 1000,
+    fails: 2,
+    changed: true,
+    prevStatus: 'up',
+    ...over,
+  });
+
+  it('says nothing about a routine deploy, in either direction', () => {
+    expect(worthAlerting(t({ status: 'maintenance' }))).toBe(false);
+    expect(worthAlerting(t({ status: 'up', prevStatus: 'maintenance' }))).toBe(false);
+  });
+
+  it('shouts when a deploy overruns', () => {
+    const over = t({ status: 'down', prevStatus: 'maintenance' });
+    expect(worthAlerting(over)).toBe(true);
+    expect(alertText(mon, over, bad, 2500).title).toContain('overrun');
+  });
+
+  it('still reports an ordinary outage and an ordinary recovery', () => {
+    expect(worthAlerting(t({}))).toBe(true);
+    expect(worthAlerting(t({ status: 'up', prevStatus: 'down' }))).toBe(true);
+  });
+
+  it('measures a recovery against the outage, not against the recovery', () => {
+    const back = t({ status: 'up', prevStatus: 'down', since: 2000, prevSince: 1400 });
+    expect(alertText(mon, back, good, 2000).body).toContain('10m');
   });
 });

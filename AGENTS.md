@@ -14,6 +14,15 @@ The page is public and the repo should be publishable.
 Internal context — real hostnames, credential locations — is in the gitignored
 `AGENTS.local.md`.
 
+## A service's claim about itself is never load-bearing
+
+`deploying` lets a service say its own failure is routine, which is a mute
+button if you let it be one. Every path that honours it expires on our clock:
+capped by `MAINTENANCE_MAX_SEC`, never applied to silence, never applied to a
+degraded metric, never applied to an outage already in progress, and the excused
+minutes are added back as downtime if it turns out to have been real. Keep every
+one of those when changing this. Tests assert each of them by name.
+
 ## Don't couple it to what it watches
 
 A health check running beside a service reports green while users get errors.
