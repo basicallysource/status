@@ -11,6 +11,7 @@ import {
   loadBeats,
   loadState,
   migrate,
+  openDeployFor,
   openDeployStmt,
   openIncidentStmt,
   pointDeployStmt,
@@ -19,9 +20,11 @@ import {
   recentDeploys,
   recentIncidents,
   tickStmts,
+  touchTokenStmt,
   type TickResult,
 } from './db';
-import { blame, deployEvents, excused } from './deploy';
+import { authorize, isOperator } from './auth';
+import { blame, deployEvents, excused, isSlow, typicalSeconds } from './deploy';
 import { fmtDuration, nextState, parseMeta, probe } from './monitor';
 import { sendAlert, worthAlerting } from './notify';
 import { faviconSvg } from './favicon';
@@ -234,12 +237,24 @@ async function buildPage(env: Env, nowSec: number): Promise<PageData> {
       detail: i.detail,
       deploy: i.deploy,
     })),
-    deploys: deploys.map((d) => ({
-      name: MONITOR_BY_ID[d.monitor]?.name ?? d.monitor,
-      version: d.version,
-      started: d.started,
-      ended: d.ended,
-    })),
+    deploys: deploys.map((d) => {
+      // Each service is judged against its own history, not a shared number:
+      // hive runs migrations before it answers and the bot just restarts.
+      const typical = typicalSeconds(deploys.filter((x) => x.monitor === d.monitor));
+      const seconds = d.ended !== null && d.source === 'reported' ? d.ended - d.started : null;
+      return {
+        name: MONITOR_BY_ID[d.monitor]?.name ?? d.monitor,
+        version: d.version,
+        started: d.started,
+        ended: d.ended,
+        // Only where it was measured. An inferred duration is an artefact of how
+        // often we looked, and putting it in a column labelled "took" would
+        // invite someone to compare it with one that means something.
+        seconds,
+        typical,
+        slow: seconds !== null && isSlow(seconds, typical),
+      };
+    }),
   };
 }
 
@@ -249,13 +264,11 @@ const json = (body: unknown, status = 200) =>
     headers: { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' },
   });
 
-const authed = (req: Request, env: Env) =>
-  !!env.BEAT_TOKEN && req.headers.get('authorization') === `Bearer ${env.BEAT_TOKEN}`;
-
 async function handleBeat(req: Request, env: Env, id: string): Promise<Response> {
   const m = MONITOR_BY_ID[id];
   if (!m || m.kind !== 'heartbeat') return json({ error: `unknown heartbeat monitor: ${id}` }, 404);
-  if (!authed(req, env)) return json({ error: 'unauthorized' }, 401);
+  const who = await authorize(req, env, id);
+  if (!who) return json({ error: 'unauthorized' }, 401);
 
   // JSON body preferred; query params keep a shell one-liner a one-liner.
   let meta: Record<string, unknown> | null = null;
@@ -278,8 +291,44 @@ async function handleBeat(req: Request, env: Env, id: string): Promise<Response>
 
   const nowSec = Math.floor(Date.now() / 1000);
   await ensureSchema(env.DB);
-  await beatStmt(env.DB, id, nowSec, meta).run();
+  await env.DB.batch([beatStmt(env.DB, id, nowSec, meta), touchTokenStmt(env.DB, who, nowSec)]);
   return json({ ok: true, monitor: id, ts: nowSec, meta });
+}
+
+/**
+ * A service telling us about its own deploy, so the duration is measured rather
+ * than inferred from how often we happen to look.
+ *
+ * `start` is called before anything is touched and `end` when the service is
+ * back and answering. Neither may ever fail the deploy that calls it: the caller
+ * ignores the result, and this returns an error rather than throwing so that a
+ * bad report cannot look like an outage of the status page itself.
+ */
+async function handleDeploy(req: Request, env: Env, id: string, phase: string): Promise<Response> {
+  const m = MONITOR_BY_ID[id];
+  if (!m) return json({ error: `unknown monitor: ${id}` }, 404);
+  const who = await authorize(req, env, id);
+  if (!who) return json({ error: 'unauthorized' }, 401);
+
+  const body = await req.json<{ version?: string }>().catch(() => ({}) as { version?: string });
+  const nowSec = Math.floor(Date.now() / 1000);
+  const open = await openDeployFor(env.DB, id);
+
+  if (phase === 'start') {
+    const version = (body.version ?? '').trim();
+    if (!version) return json({ error: 'version is required' }, 400);
+    const writes = [openDeployStmt(env.DB, id, version, nowSec, 'reported')];
+    // A previous deploy that never reported an end belongs to a run that died.
+    // Close it at its own start so it contributes nothing to the timings.
+    if (open) writes.unshift(closeDeployStmt(env.DB, id, open.started));
+    writes.push(touchTokenStmt(env.DB, who, nowSec));
+    await env.DB.batch(writes);
+    return json({ ok: true, monitor: id, version, started: nowSec });
+  }
+
+  if (!open) return json({ error: 'no deploy is open for this service' }, 409);
+  await env.DB.batch([closeDeployStmt(env.DB, id, nowSec), touchTokenStmt(env.DB, who, nowSec)]);
+  return json({ ok: true, monitor: id, version: open.version, seconds: nowSec - open.started });
 }
 
 export default {
@@ -294,6 +343,13 @@ export default {
     if (req.method === 'POST' && path.startsWith('/beat/')) {
       return handleBeat(req, env, decodeURIComponent(path.slice(6)));
     }
+    if (req.method === 'POST' && path.startsWith('/deploy/')) {
+      const [id, phase, ...rest] = path.slice(8).split('/');
+      if (!id || rest.length || (phase !== 'start' && phase !== 'end')) {
+        return json({ error: 'expected /deploy/<monitor>/start or /deploy/<monitor>/end' }, 404);
+      }
+      return handleDeploy(req, env, decodeURIComponent(id), phase);
+    }
     if (path === '/healthz') return json({ ok: true, service: 'basically-status' });
     if (path === '/favicon.svg') {
       const s = new URL(req.url).searchParams.get('s') ?? 'unknown';
@@ -307,7 +363,9 @@ export default {
     }
     if (path === '/api/status') return json(await buildPage(env, now()));
     if (path === '/api/tick' && req.method === 'POST') {
-      return authed(req, env) ? json(await tick(env)) : json({ error: 'unauthorized' }, 401);
+      // The operator credential, not a service's: running a check on demand is
+      // not something any reporting machine has a reason to do.
+      return isOperator(req, env) ? json(await tick(env)) : json({ error: 'unauthorized' }, 401);
     }
     if (path === '/') {
       return new Response(renderPage(await buildPage(env, now())), {

@@ -35,9 +35,35 @@ and the alert is louder than an ordinary one. It never covers silence, and never
 covers a degraded metric. Time excused and later judged an outage is added back
 to that day's downtime.
 
-Resolution is the reporting interval — a deploy shorter than one beat is
-recorded as a point in time. For exact durations a service would have to report
-its own start and end.
+A service that reports its own start and end gets an exact duration, and is
+compared against the median of its own last ten deploys:
+
+```bash
+curl -XPOST -H "Authorization: Bearer $TOKEN" -d '{"version":"r1"}' \
+  https://status.basically.website/deploy/<id>/start
+# ... deploy ...
+curl -XPOST -H "Authorization: Bearer $TOKEN" \
+  https://status.basically.website/deploy/<id>/end     # -> {"seconds": 38}
+```
+
+Deploys inferred from a heartbeat are recorded too, but their duration is an
+artefact of how often we looked, so they are kept out of the statistics.
+
+## Tokens
+
+`BEAT_TOKEN` is the operator credential and authorises `POST /api/tick` only.
+Everything a machine reports about a service uses a row in the `tokens` table,
+hashed and scoped to the services that machine may speak for — a credential on
+one box cannot file a fake outage, or a fake maintenance window, against a
+service on another.
+
+Nothing mints tokens over HTTP. Rows are inserted with `wrangler d1 execute`,
+which already requires being able to deploy this worker:
+
+```sql
+INSERT INTO tokens (name, hash, monitors, created)
+VALUES ('blip', '<sha256 of the token>', '["balloon"]', <epoch>);
+```
 
 ## Routes
 

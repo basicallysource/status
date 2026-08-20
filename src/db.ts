@@ -1,5 +1,5 @@
 import { HISTORY_DAYS } from './config';
-import type { DeployRow } from './deploy';
+import type { DeployRow, DeploySource } from './deploy';
 import type { StateRow, Status } from './types';
 
 // Four tables, each earning its place: where things stand, when a beat last
@@ -42,18 +42,44 @@ CREATE TABLE IF NOT EXISTS deploys (
   monitor TEXT    NOT NULL,
   version TEXT    NOT NULL,
   started INTEGER NOT NULL,
-  ended   INTEGER
+  ended   INTEGER,
+  -- 'reported' has exact times from the deploying process; 'observed' is
+  -- inferred from a heartbeat and is only accurate to the beat interval.
+  source  TEXT    NOT NULL DEFAULT 'observed'
 );
 CREATE INDEX IF NOT EXISTS deploys_recent ON deploys (monitor, started DESC);
+-- Credentials for machines that report about services. Hashed, and scoped to
+-- the services each machine may speak for. Rows are inserted by hand; there is
+-- no endpoint that creates one. See src/auth.ts.
+CREATE TABLE IF NOT EXISTS tokens (
+  name      TEXT PRIMARY KEY,
+  hash      TEXT NOT NULL,
+  monitors  TEXT NOT NULL,
+  created   INTEGER NOT NULL,
+  last_used INTEGER
+);
+CREATE UNIQUE INDEX IF NOT EXISTS tokens_hash ON tokens (hash);
 CREATE TABLE IF NOT EXISTS kv (k TEXT PRIMARY KEY, v TEXT NOT NULL);
 `;
 
 // SQLite has no ADD COLUMN IF NOT EXISTS, and on every deploy after the first
 // the column is already there. That is the ordinary case, not an error.
-const ADDITIONS = ['ALTER TABLE incidents ADD COLUMN deploy TEXT'];
+const ADDITIONS = [
+  'ALTER TABLE incidents ADD COLUMN deploy TEXT',
+  "ALTER TABLE deploys ADD COLUMN source TEXT NOT NULL DEFAULT 'observed'",
+];
 
 export async function migrate(db: D1Database): Promise<void> {
-  const stmts = SCHEMA.split(';').map((s) => s.trim()).filter(Boolean);
+  // Comments come out before the split, because statements are separated on `;`
+  // and prose contains semicolons. A comment quietly cutting a CREATE TABLE in
+  // half fails as "incomplete input", which reads like a typo in the schema
+  // rather than like the sentence above it.
+  const stmts = SCHEMA.split('\n')
+    .filter((l) => !l.trim().startsWith('--'))
+    .join('\n')
+    .split(';')
+    .map((s) => s.trim())
+    .filter(Boolean);
   await db.batch(stmts.map((s) => db.prepare(s)));
   for (const sql of ADDITIONS) {
     await db
@@ -180,16 +206,26 @@ export const openIncidentStmt = (
     )
     .bind(monitor, status, ts, detail, deploy);
 
-export const openDeployStmt = (db: D1Database, monitor: string, version: string, ts: number) =>
+export const openDeployStmt = (
+  db: D1Database,
+  monitor: string,
+  version: string,
+  ts: number,
+  source: DeploySource = 'observed',
+) =>
   db
-    .prepare('INSERT INTO deploys (monitor, version, started, ended) VALUES (?1,?2,?3,NULL)')
-    .bind(monitor, version, ts);
+    .prepare(
+      'INSERT INTO deploys (monitor, version, started, ended, source) VALUES (?1,?2,?3,NULL,?4)',
+    )
+    .bind(monitor, version, ts, source);
 
-/** A deploy that began and finished between two reports. Minute resolution is
+/** A deploy that began and finished between two heartbeats. Minute resolution is
  *  the honest answer, and better than no record of it at all. */
 export const pointDeployStmt = (db: D1Database, monitor: string, version: string, ts: number) =>
   db
-    .prepare('INSERT INTO deploys (monitor, version, started, ended) VALUES (?1,?2,?3,?3)')
+    .prepare(
+      "INSERT INTO deploys (monitor, version, started, ended, source) VALUES (?1,?2,?3,?3,'observed')",
+    )
     .bind(monitor, version, ts);
 
 export const closeDeployStmt = (db: D1Database, monitor: string, ts: number) =>
@@ -200,11 +236,21 @@ export const closeDeployStmt = (db: D1Database, monitor: string, ts: number) =>
     )
     .bind(monitor, ts);
 
+/** The open deploy a service is reporting, if it has one. */
+export const openDeployFor = (db: D1Database, monitor: string) =>
+  db
+    .prepare(
+      `SELECT monitor, version, started, ended, source FROM deploys
+       WHERE monitor = ?1 AND ended IS NULL ORDER BY started DESC LIMIT 1`,
+    )
+    .bind(monitor)
+    .first<DeployRow>();
+
 /** The most recent deploy per monitor, which is the only one a tick asks about. */
 export async function latestDeploys(db: D1Database): Promise<Record<string, DeployRow>> {
   const { results } = await db
     .prepare(
-      `SELECT d.monitor, d.version, d.started, d.ended FROM deploys d
+      `SELECT d.monitor, d.version, d.started, d.ended, d.source FROM deploys d
        JOIN (SELECT monitor, MAX(started) AS started FROM deploys GROUP BY monitor) m
          ON m.monitor = d.monitor AND m.started = d.started`,
     )
@@ -214,11 +260,16 @@ export async function latestDeploys(db: D1Database): Promise<Record<string, Depl
 
 export async function recentDeploys(db: D1Database, limit = 20): Promise<DeployRow[]> {
   const { results } = await db
-    .prepare('SELECT monitor, version, started, ended FROM deploys ORDER BY started DESC LIMIT ?1')
+    .prepare(
+      'SELECT monitor, version, started, ended, source FROM deploys ORDER BY started DESC LIMIT ?1',
+    )
     .bind(limit)
     .all<DeployRow>();
   return results ?? [];
 }
+
+export const touchTokenStmt = (db: D1Database, name: string, ts: number) =>
+  db.prepare('UPDATE tokens SET last_used = ?2 WHERE name = ?1').bind(name, ts);
 
 export interface DayRow {
   up: number;

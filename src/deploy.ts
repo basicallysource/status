@@ -1,4 +1,4 @@
-import { DEPLOY_GRACE_SEC } from './config';
+import { DEPLOY_GRACE_SEC, DEPLOY_MAX_OPEN_SEC, DEPLOY_TYPICAL_WINDOW } from './config';
 
 /**
  * Deploys, learned from what a service already reports about itself.
@@ -13,12 +13,56 @@ import { DEPLOY_GRACE_SEC } from './config';
  * heartbeat already has a token. See agents/balloon-beat.sh.
  */
 
+/**
+ * How we came to know about a deploy, which decides whether its duration is a
+ * measurement or a guess.
+ *
+ * `reported` is the deploying process telling us when it began and ended, so the
+ * number is exact. `observed` is inferred from a heartbeat, so it is only ever
+ * accurate to the beat interval — good enough to mark that a deploy happened,
+ * useless for asking whether deploys are getting slower. Only reported ones are
+ * allowed into the timing statistics.
+ */
+export type DeploySource = 'reported' | 'observed';
+
 /** A deploy that is running, or one that has finished. */
 export interface DeployRow {
   monitor: string;
   version: string;
   started: number;
   ended: number | null;
+  source: DeploySource;
+}
+
+/** Whether a deploy row is still meaningfully in progress. */
+export const isOpen = (d: DeployRow | undefined, nowSec: number): boolean =>
+  !!d && d.ended === null && nowSec - d.started < DEPLOY_MAX_OPEN_SEC;
+
+/**
+ * How long this service's deploys usually take, in seconds, from the ones we
+ * actually measured. The median rather than the mean: one deploy that stalled
+ * for twenty minutes should not move the bar everything else is judged against.
+ */
+export function typicalSeconds(rows: DeployRow[]): number | null {
+  const durations = rows
+    .filter((d) => d.source === 'reported' && d.ended !== null)
+    .slice(0, DEPLOY_TYPICAL_WINDOW)
+    .map((d) => d.ended! - d.started)
+    .sort((a, b) => a - b);
+  if (!durations.length) return null;
+  const mid = Math.floor(durations.length / 2);
+  return durations.length % 2 ? durations[mid] : Math.round((durations[mid - 1] + durations[mid]) / 2);
+}
+
+/**
+ * Whether a deploy took long enough to be worth a second look.
+ *
+ * Both conditions matter. The ratio catches a service whose deploys have crept
+ * up; the floor stops a 4-second deploy becoming 9 seconds and being called a
+ * problem, which is how a signal like this turns into noise and gets ignored.
+ */
+export function isSlow(seconds: number, typical: number | null): boolean {
+  return typical !== null && seconds > typical * 2 && seconds - typical >= 30;
 }
 
 export type DeployEvent =
@@ -82,6 +126,7 @@ export function excused(
 ): boolean {
   if (obs.stale) return false;
   if (deployingVersion(meta)) return true;
+  if (isOpen(latest, nowSec)) return true;
   return !!latest?.ended && nowSec - latest.ended <= DEPLOY_GRACE_SEC;
 }
 
@@ -93,8 +138,7 @@ export function blame(
 ): string | null {
   const deploying = deployingVersion(meta);
   if (deploying) return deploying;
-  if (latest && (latest.ended === null || nowSec - latest.ended <= DEPLOY_GRACE_SEC)) {
-    return latest.version;
-  }
+  if (isOpen(latest, nowSec)) return latest!.version;
+  if (latest?.ended && nowSec - latest.ended <= DEPLOY_GRACE_SEC) return latest.version;
   return null;
 }

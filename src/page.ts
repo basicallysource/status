@@ -37,6 +37,10 @@ export interface PageDeploy {
   version: string;
   started: number;
   ended: number | null;
+  /** Null when nobody measured it — see the `source` column. */
+  seconds: number | null;
+  typical: number | null;
+  slow: boolean;
 }
 
 export interface PageData {
@@ -110,6 +114,25 @@ const incident = (i: PageIncident, now: number) => `
   </div>
 </li>`;
 
+const deploy = (d: PageDeploy, now: number) => `
+<li>
+  <span class="pip ${d.ended === null ? 'maintenance' : 'up'}"></span>
+  <div>
+    <div><strong>${esc(d.name)}</strong> updated to ${esc(d.version)}${
+      d.ended === null
+        ? ` — <em>in progress, ${esc(fmtDuration(now - d.started))} so far</em>`
+        : d.seconds !== null
+          ? ` — took ${esc(fmtDuration(d.seconds))}`
+          : ''
+    }</div>
+    <div class="sub">${esc(utc(d.started))}${
+      // The comparison is the point of showing a number at all: 40s means
+      // nothing on its own, and "40s, usually 15s" means something.
+      d.slow && d.typical !== null ? ` · <span class="warn">usually ${esc(fmtDuration(d.typical))}</span>` : ''
+    }</div>
+  </div>
+</li>`;
+
 /** The tab has to say what is wrong without being read. */
 function pageTitle(overall: Status): string {
   const prefix =
@@ -177,6 +200,8 @@ li{display:flex;gap:10px;background:var(--card);border:1px solid var(--line);
   border-radius:10px;padding:13px 18px;margin-bottom:8px;font-size:14px}
 .pip{width:8px;height:8px;border-radius:50%;flex:none;margin-top:7px;background:var(--unknown)}
 .pip.up{background:var(--up)}.pip.degraded{background:var(--degraded)}.pip.down{background:var(--down)}
+.pip.maintenance{background:var(--maintenance)}
+.warn{color:var(--degraded)}
 footer{margin-top:36px;color:var(--muted);font-size:12px;display:flex;
   justify-content:space-between;gap:12px;flex-wrap:wrap}
 a{color:inherit}
@@ -193,6 +218,14 @@ a{color:inherit}
     d.incidents.length
       ? `<ul>${d.incidents.map((i) => incident(i, d.now)).join('')}</ul>`
       : `<p class="sub">No incidents recorded.</p>`
+  }
+  ${
+    d.deploys.length
+      ? `<h2>Recent updates</h2><ul>${d.deploys
+          .slice(0, 8)
+          .map((x) => deploy(x, d.now))
+          .join('')}</ul>`
+      : ''
   }
   <footer>
     <span>Checked every minute · updated ${esc(utc(d.now))}</span>

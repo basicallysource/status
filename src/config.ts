@@ -82,6 +82,20 @@ export const MAINTENANCE_MAX_SEC = 300;
  */
 export const DEPLOY_GRACE_SEC = 120;
 
+/**
+ * When an unfinished deploy is presumed abandoned.
+ *
+ * A deploy that reported its start and never its end is a deploy whose reporter
+ * died, and it must not go on excusing failures or being blamed for unrelated
+ * ones forever. Generous, because a real one can be slow — hive runs database
+ * migrations before it answers — and because MAINTENANCE_MAX_SEC already bounds
+ * the part that actually hides anything.
+ */
+export const DEPLOY_MAX_OPEN_SEC = 1800;
+
+/** How many past deploys a service's typical duration is drawn from. */
+export const DEPLOY_TYPICAL_WINDOW = 10;
+
 /** Days of history the page draws. */
 export const HISTORY_DAYS = 90;
 

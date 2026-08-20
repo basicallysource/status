@@ -1,9 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import { checkThresholds, fmtDuration, nextState, probeHeartbeat, probeHttp } from '../src/monitor';
 import { overall, renderBoard } from '../src/board';
-import { deployEvents, excused } from '../src/deploy';
+import { deployEvents, excused, isOpen, isSlow, typicalSeconds, type DeployRow } from '../src/deploy';
+import { allowed } from '../src/auth';
 import { alertText, worthAlerting } from '../src/notify';
-import { MAINTENANCE_MAX_SEC } from '../src/config';
+import { DEPLOY_MAX_OPEN_SEC, MAINTENANCE_MAX_SEC } from '../src/config';
 import { describeMeta } from '../src/index';
 import type {
   HeartbeatMonitor,
@@ -246,7 +247,13 @@ describe('deploy events', () => {
 
 describe('what a declared deploy may excuse', () => {
   const beat = { stale: false };
-  const done = (ended: number) => ({ monitor: 'x', version: 'r2', started: ended - 30, ended });
+  const done = (ended: number): DeployRow => ({
+    monitor: 'x',
+    version: 'r2',
+    started: ended - 30,
+    ended,
+    source: 'reported',
+  });
 
   it('excuses a failure while the deploy is being reported', () => {
     expect(excused({ deploying: 'r2' }, undefined, beat, 5000)).toBe(true);
@@ -266,6 +273,60 @@ describe('what a declared deploy may excuse', () => {
 
   it('excuses nothing when no deploy was ever reported', () => {
     expect(excused({ version: 'r2' }, undefined, beat, 5000)).toBe(false);
+  });
+});
+
+describe('deploy timing', () => {
+  const d = (started: number, ended: number | null, source: DeployRow['source']): DeployRow => ({
+    monitor: 'x',
+    version: 'v',
+    started,
+    ended,
+    source,
+  });
+
+  it('takes the median of measured deploys', () => {
+    const rows = [d(0, 40, 'reported'), d(0, 10, 'reported'), d(0, 20, 'reported')];
+    expect(typicalSeconds(rows)).toBe(20);
+  });
+
+  it('ignores inferred ones — their duration is how often we looked', () => {
+    expect(typicalSeconds([d(0, 600, 'observed'), d(0, 10, 'reported')])).toBe(10);
+    expect(typicalSeconds([d(0, 60, 'observed')])).toBeNull();
+  });
+
+  it('ignores deploys still running', () => {
+    expect(typicalSeconds([d(0, null, 'reported')])).toBeNull();
+  });
+
+  it('calls a deploy slow only when it is both relatively and absolutely worse', () => {
+    expect(isSlow(120, 30)).toBe(true);
+    // Four times as long, but nine seconds is nobody's problem.
+    expect(isSlow(12, 3)).toBe(false);
+    expect(isSlow(50, 40)).toBe(false);
+    expect(isSlow(500, null)).toBe(false);
+  });
+
+  it('stops treating an abandoned deploy as running', () => {
+    expect(isOpen(d(1000, null, 'reported'), 1600)).toBe(true);
+    expect(isOpen(d(1000, null, 'reported'), 1000 + DEPLOY_MAX_OPEN_SEC)).toBe(false);
+  });
+});
+
+describe('who may report what', () => {
+  it('honours a scope of specific services', () => {
+    expect(allowed('["balloon"]', 'balloon')).toBe(true);
+    expect(allowed('["balloon"]', 'hive')).toBe(false);
+  });
+
+  it('honours a wildcard', () => {
+    expect(allowed('*', 'anything')).toBe(true);
+  });
+
+  it('fails shut on a scope it cannot read', () => {
+    expect(allowed('balloon', 'balloon')).toBe(false);
+    expect(allowed('', 'balloon')).toBe(false);
+    expect(allowed('null', 'balloon')).toBe(false);
   });
 });
 
