@@ -30,6 +30,7 @@ import { blame, deployEvents, excused, isSlow, typicalSeconds } from './deploy';
 import { fmtDuration, nextState, parseMeta, probe } from './monitor';
 import { sendAlert, worthAlerting } from './notify';
 import { faviconSvg } from './favicon';
+import { renderAdmin } from './admin';
 import { PUBLIC_NOTE, publicDetail } from './publish';
 import { renderPage, type DayCell, type PageData, type PageMonitor } from './page';
 import type { Env, Status } from './types';
@@ -379,6 +380,14 @@ export default {
     // we record and do not publish. All of it requires the operator credential,
     // which a box's own token is not — blip may report about blip and cannot
     // read any of this back.
+    // The shell only; it carries no data and asks the browser for a
+    // credential, then calls the same operator APIs a terminal would. There is
+    // deliberately no second authentication path and no server-side session.
+    if (path === '/admin') {
+      return new Response(renderAdmin(), {
+        headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' },
+      });
+    }
     if (path === '/api/deploys') {
       if (!isOperator(req, env)) return json({ error: 'unauthorized' }, 401);
       await ensureSchema(env.DB);
@@ -402,10 +411,14 @@ export default {
       if (!isOperator(req, env)) return json({ error: 'unauthorized' }, 401);
       const q = new URL(req.url).searchParams;
       const hours = Math.min(Number(q.get('hours') ?? 6) || 6, HOST_QUERY_MAX_HOURS);
+      // Thinning is the caller's choice because only the caller knows whether
+      // it is drawing a month or reading last night.
+      const stride = Math.max(0, Number(q.get('stride') ?? 0) || 0);
       await ensureSchema(env.DB);
-      const rows = await hostSamples(env.DB, now() - hours * 3600, q.get('host') ?? undefined);
+      const rows = await hostSamples(env.DB, now() - hours * 3600, q.get('host') ?? undefined, stride);
       return json({
         hours,
+        stride,
         samples: rows.map((r) => ({ host: r.host, ts: r.ts, ...(parseMeta(r.metrics) ?? {}) })),
       });
     }

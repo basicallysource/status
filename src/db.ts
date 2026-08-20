@@ -332,16 +332,43 @@ export interface HostSample {
   metrics: string;
 }
 
+/**
+ * Box samples in a time range, thinned to roughly one per `strideSec`.
+ *
+ * Thinned rather than averaged, and the difference matters here. A month at a
+ * sample a minute is 43,000 rows per box, which no chart can draw and no worker
+ * should try to hold — but averaging them would mean pulling every row into a
+ * 10ms CPU budget and reducing it there, which is the expensive half of the job.
+ * Taking every Nth sample costs one modulo in SQL.
+ *
+ * The trade is real and worth stating: a thinned month can miss a one-minute
+ * spike entirely. That is the right way round for the question this answers,
+ * which is "has this been creeping up since June". For "what happened at 3am on
+ * Tuesday", ask for a narrow range and get every sample in it.
+ */
 export async function hostSamples(
   db: D1Database,
   sinceSec: number,
   host?: string,
+  strideSec = 0,
 ): Promise<HostSample[]> {
-  const sql = host
-    ? 'SELECT host, ts, metrics FROM host_samples WHERE ts >= ?1 AND host = ?2 ORDER BY ts DESC'
-    : 'SELECT host, ts, metrics FROM host_samples WHERE ts >= ?1 ORDER BY ts DESC';
-  const stmt = host ? db.prepare(sql).bind(sinceSec, host) : db.prepare(sql).bind(sinceSec);
-  const { results } = await stmt.all<HostSample>();
+  // Placeholders are numbered as they are added, so the optional clauses cannot
+  // get out of step with the values bound to them.
+  const binds: (string | number)[] = [sinceSec];
+  const where = ['ts >= ?1'];
+  if (host) {
+    binds.push(host);
+    where.push(`host = ?${binds.length}`);
+  }
+  // Samples land about 60s apart, so picking the ones inside a 60s window at
+  // the top of each stride yields one per stride. Below that there is nothing
+  // to thin.
+  if (strideSec > 60) {
+    binds.push(strideSec);
+    where.push(`ts % ?${binds.length} < 60`);
+  }
+  const sql = `SELECT host, ts, metrics FROM host_samples WHERE ${where.join(' AND ')} ORDER BY ts DESC`;
+  const { results } = await db.prepare(sql).bind(...binds).all<HostSample>();
   return results ?? [];
 }
 
