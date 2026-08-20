@@ -34,7 +34,36 @@ an update happened. Ours: every metric value, version tags, deploy durations,
 threshold numbers, probe error text, and all host samples — reachable through
 `/api/deploys` and `/api/hosts`, both operator-only.
 
+## The collector
+
+`collector/` is a Go agent on each box, replacing a hand-installed shell script.
+Read its README before changing it. Two rules it exists to keep:
+
+- **Never fork and never walk a filesystem.** Everything is a read of a file the
+  kernel synthesises in memory, plus one `statfs`. Sizing a directory is the one
+  measurement on these boxes that costs real I/O. The single exception is
+  `systemctl is-active`, and only where a service heartbeat is also being sent.
+- **Absent means not measured.** A stopped service reports nothing rather than
+  zero; a kernel without pressure stalls simply has no `psi_*` keys. A zero is a
+  measurement, and a chart will draw it as one.
+
+It is resident rather than a timer because `/proc/stat` counts since boot, so
+every rate is a delta between two readings and a process that exits cannot
+subtract.
+
+Samples are never spooled. A failed report is logged and dropped — replaying an
+hour of stale samples would let a box that was dead backfill an hour of "I was
+fine", and the gap is the honest record.
+
 ## Deploying
+
+Two tags, deliberately separate, because they reach different machines by
+different means and one shared version would make every page tweak restart five
+boxes.
+
+- `v*` — the worker. Checks, deploys, then curls the live domain.
+- `collector-v*` — the box agent. Builds a static binary and publishes it with a
+  checksum; boxes pull it themselves within 30 minutes.
 
 A tag ships. Push to main runs the tests and stops there.
 
