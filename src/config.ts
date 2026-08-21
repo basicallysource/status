@@ -46,6 +46,36 @@ export const MONITORS: Monitor[] = [
     description: 'Discord bot.',
   },
   {
+    id: 'assets',
+    name: 'Asset service',
+    group: 'basically',
+    kind: 'http',
+    // readyz rather than healthz: healthz says the process is running, which
+    // it can be while its storage or its catalog is unreachable. This one
+    // answers only when the whole path an upload takes actually works.
+    url: 'https://assets.basically.website/readyz',
+    expectBody: '"status":"ready"',
+    timeoutMs: 8000,
+    description: 'Uploading files and looking them up.',
+  },
+  {
+    id: 'assets-cdn',
+    name: 'Asset delivery',
+    group: 'basically',
+    kind: 'http',
+    // A real object, fetched the way a page fetches an image. Separate from
+    // the service on purpose: files already published are served straight from
+    // the CDN and keep loading when the service is down, and the reverse is
+    // just as true, so one check cannot answer for both.
+    //
+    // The URL is permanent. It names a hash of its own contents, so nothing
+    // can ever be served under it but these bytes.
+    url: 'https://basically-asset-service.nyc3.cdn.digitaloceanspaces.com/status/delivery-probe-8b81097c0140.txt',
+    expectBody: 'asset delivery is up',
+    timeoutMs: 8000,
+    description: 'Images and files on our sites. This is what pages load.',
+  },
+  {
     id: 'basically-website',
     name: 'basically.website',
     group: 'basically',
