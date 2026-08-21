@@ -50,7 +50,12 @@ export function renderBoard(rows: BoardRow[], nowSec: number): string {
     const why = r.status === 'up' ? '' : r.detail ? ` — ${r.detail}` : '';
     return `${ICON[r.status]} **${r.name}** · ${LABEL[r.status]}${held}${why} · ${r.uptime.toFixed(2)}% 90d`;
   });
-  return lines.join('\n');
+  // The embed title already links to the site, but a title that happens to be
+  // a link is not something anyone reads as "go here". A plain link on its own
+  // line is. It goes in the description because Discord renders no markdown in
+  // an embed footer — a link there arrives as literal brackets.
+  const host = SITE.url.replace(/^https?:\/\//, '');
+  return [...lines, '', `[${host}](${SITE.url})`].join('\n');
 }
 
 async function send(env: Env, body: unknown, messageId: string | null): Promise<string | null> {

@@ -176,6 +176,13 @@ describe('board', () => {
     expect(out).toContain('99.10% 90d');
     expect(out).toContain('1m');
   });
+
+  it('ends with a link to the page, in the description', () => {
+    const out = renderBoard([{ name: 'Hive', status: 'up', since: 0, detail: '', uptime: 100 }], 1000);
+    // Last line, and markdown — an embed footer renders neither, which is why
+    // this belongs to the description rather than beside the timestamp.
+    expect(out.split('\n').at(-1)).toBe('[status.basically.website](https://status.basically.website)');
+  });
 });
 
 describe('fmtDuration', () => {
