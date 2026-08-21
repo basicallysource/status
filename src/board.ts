@@ -82,6 +82,23 @@ async function send(env: Env, body: unknown, messageId: string | null): Promise<
 }
 
 /**
+ * One row rendered at a fixed instant, so the string changes when the LAYOUT
+ * changes and not when time passes. Folding it into the fingerprint is what
+ * makes an edit to renderBoard reach the card.
+ *
+ * Without it the fingerprint was only status-per-service, so a redesign of the
+ * board sat in the worker until some service happened to go down — the card
+ * kept its old shape and nothing looked broken, which is the bad kind of quiet.
+ * Fingerprinting the real description instead would redraw every minute, since
+ * durations and uptimes move constantly; that cost is what the fingerprint
+ * exists to avoid.
+ */
+const FORMAT_PROBE = renderBoard(
+  [{ name: 'probe', status: 'up', since: 0, detail: '', uptime: 100 }],
+  0,
+);
+
+/**
  * Mirrors the page into one Discord message, edited in place. Only when the
  * content actually changed — an unchanged board costs nothing.
  */
@@ -90,7 +107,7 @@ export async function syncBoard(env: Env, rows: BoardRow[], nowSec: number): Pro
 
   const status = overall(rows);
   const description = renderBoard(rows, nowSec);
-  const fingerprint = `${status}\n${rows.map((r) => `${r.name}:${r.status}`).join('|')}`;
+  const fingerprint = `${status}\n${FORMAT_PROBE}\n${rows.map((r) => `${r.name}:${r.status}`).join('|')}`;
 
   const [prev, messageId] = await Promise.all([
     kvGet(env.DB, 'board:fingerprint'),
