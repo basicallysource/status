@@ -1,22 +1,4 @@
-package main
-
-import (
-	"context"
-	"crypto/sha256"
-	"encoding/hex"
-	"encoding/json"
-	"fmt"
-	"io"
-	"log"
-	"net/http"
-	"os"
-	"os/exec"
-	"path/filepath"
-	"strings"
-	"time"
-)
-
-// Keeping itself current.
+// Package selfupdate keeps the collector current.
 //
 // The whole point of replacing the shell script was that a hand-installed thing
 // drifts where nobody can see it. A program that ships with a version and then
@@ -34,12 +16,28 @@ import (
 // holds half a binary. The old one is kept as .prev. If the new one cannot
 // start, systemd restarts the service and the operator has something to roll
 // back to.
+package selfupdate
 
-const (
-	updateInterval       = 30 * time.Minute
-	installedVersionFile = "/var/lib/balloon-release/installed/bot"
-	pendingDeployFile    = "/run/balloon-deploy"
+import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"fmt"
+	"io"
+	"log"
+	"net/http"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"time"
 )
+
+// Interval is how often to look. Long on purpose: a version behind for half an
+// hour costs nothing, and a fleet asking GitHub every minute is a fleet that
+// gets rate-limited on the day it needs the fix.
+const Interval = 30 * time.Minute
 
 type release struct {
 	TagName string `json:"tag_name"`
@@ -49,40 +47,42 @@ type release struct {
 	} `json:"assets"`
 }
 
-func selfUpdate(ctx context.Context, repo string) {
-	latest, err := latestRelease(ctx, repo)
+// Run installs the latest release if it is not the one already running, and
+// reports whether it did. The caller is expected to exit on true: systemd's
+// Restart=always is the whole restart mechanism, so nothing here has to know
+// how to exec itself.
+func Run(ctx context.Context, repo, current string) bool {
+	latest, err := latestRelease(ctx, repo, current)
 	if err != nil {
 		log.Printf("could not check for updates: %v", err)
-		return
+		return false
 	}
 	want := strings.TrimPrefix(latest.TagName, "collector-")
-	if want == "" || want == version {
-		return
+	if want == "" || want == current {
+		return false
 	}
 	// A binary built from a laptop should not be silently replaced by CI's idea
 	// of current: somebody is debugging, and pulling the rug is unkind.
-	if version == "dev" {
+	if current == "dev" {
 		log.Printf("release %s is available; not replacing a dev build", want)
-		return
+		return false
 	}
-	if err := installUpdate(ctx, latest, want); err != nil {
-		log.Printf("update to %s failed, staying on %s: %v", want, version, err)
-		return
+	if err := install(ctx, latest, want, current); err != nil {
+		log.Printf("update to %s failed, staying on %s: %v", want, current, err)
+		return false
 	}
-	log.Printf("updated %s -> %s, restarting", version, want)
-	// Exit cleanly and let systemd start the new binary. Restart=always makes
-	// this the whole restart mechanism; nothing has to know how to exec itself.
-	os.Exit(0)
+	log.Printf("updated %s -> %s, restarting", current, want)
+	return true
 }
 
-func latestRelease(ctx context.Context, repo string) (*release, error) {
+func latestRelease(ctx context.Context, repo, current string) (*release, error) {
 	url := fmt.Sprintf("https://api.github.com/repos/%s/releases/latest", repo)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return nil, err
 	}
 	req.Header.Set("Accept", "application/vnd.github+json")
-	req.Header.Set("User-Agent", "status-collector/"+version)
+	req.Header.Set("User-Agent", "status-collector/"+current)
 	res, err := (&http.Client{Timeout: 30 * time.Second}).Do(req)
 	if err != nil {
 		return nil, err
@@ -98,7 +98,7 @@ func latestRelease(ctx context.Context, repo string) (*release, error) {
 	return &out, nil
 }
 
-func installUpdate(ctx context.Context, latest *release, want string) error {
+func install(ctx context.Context, latest *release, want, current string) error {
 	binaryURL, sumURL := "", ""
 	for _, a := range latest.Assets {
 		switch a.Name {
@@ -131,7 +131,7 @@ func installUpdate(ctx context.Context, latest *release, want string) error {
 	defer os.Remove(tmpName)
 
 	hasher := sha256.New()
-	if err := download(ctx, binaryURL, io.MultiWriter(tmp, hasher)); err != nil {
+	if err := download(ctx, binaryURL, current, io.MultiWriter(tmp, hasher)); err != nil {
 		tmp.Close()
 		return err
 	}
@@ -139,13 +139,13 @@ func installUpdate(ctx context.Context, latest *release, want string) error {
 		return err
 	}
 
-	expected, err := fetchString(ctx, sumURL)
+	expected, err := fetchString(ctx, sumURL, current)
 	if err != nil {
 		return err
 	}
 	got := hex.EncodeToString(hasher.Sum(nil))
-	if want, _, _ := strings.Cut(strings.TrimSpace(expected), " "); !strings.EqualFold(want, got) {
-		return fmt.Errorf("checksum mismatch: release says %s, download is %s", want, got)
+	if sum, _, _ := strings.Cut(strings.TrimSpace(expected), " "); !strings.EqualFold(sum, got) {
+		return fmt.Errorf("checksum mismatch: release says %s, download is %s", sum, got)
 	}
 	if err := os.Chmod(tmpName, 0o755); err != nil {
 		return err
@@ -174,12 +174,12 @@ func installUpdate(ctx context.Context, latest *release, want string) error {
 	return nil
 }
 
-func download(ctx context.Context, url string, dst io.Writer) error {
+func download(ctx context.Context, url, current string, dst io.Writer) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return err
 	}
-	req.Header.Set("User-Agent", "status-collector/"+version)
+	req.Header.Set("User-Agent", "status-collector/"+current)
 	res, err := (&http.Client{Timeout: 5 * time.Minute}).Do(req)
 	if err != nil {
 		return err
@@ -194,33 +194,10 @@ func download(ctx context.Context, url string, dst io.Writer) error {
 	return err
 }
 
-func fetchString(ctx context.Context, url string) (string, error) {
+func fetchString(ctx context.Context, url, current string) (string, error) {
 	var sb strings.Builder
-	if err := download(ctx, url, &sb); err != nil {
+	if err := download(ctx, url, current, &sb); err != nil {
 		return "", err
 	}
 	return sb.String(), nil
-}
-
-func readTrimmed(path string) string {
-	b, err := os.ReadFile(path)
-	if err != nil {
-		return ""
-	}
-	return strings.TrimSpace(string(b))
-}
-
-// freshFlag returns a file's contents only if it was written recently. A stale
-// file is a claim nobody has renewed, and treating it as current is how a
-// finished deploy goes on excusing a real outage.
-func freshFlag(path string, within time.Duration) string {
-	fi, err := os.Stat(path)
-	if err != nil || time.Since(fi.ModTime()) > within {
-		return ""
-	}
-	value := readTrimmed(path)
-	if len(value) > 64 {
-		value = value[:64]
-	}
-	return value
 }

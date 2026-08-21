@@ -168,7 +168,7 @@ curl -XPOST -H "Authorization: Bearer $TOKEN" \
 ```
 
 `collector/` is the agent that runs on the boxes and sends both of the above.
-`beats/` holds the shell scripts it replaced, kept until every box is on it.
+The curl is what a box that is not ours can do instead: one heartbeat, no agent.
 
 ## Developing
 

@@ -1,6 +1,6 @@
 //go:build !linux
 
-package main
+package host
 
 // The collector only ever runs on Linux. This exists so the package still
 // builds and its tests still run on the Mac these boxes are managed from —

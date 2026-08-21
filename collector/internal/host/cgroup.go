@@ -1,4 +1,4 @@
-package main
+package host
 
 import (
 	"encoding/json"
@@ -28,8 +28,8 @@ const cgroupRoot = "sys/fs/cgroup"
 // Names are given in config rather than discovered, because "every cgroup on the
 // box" is hundreds of rows a minute of mostly nothing, and the handful that
 // matter are known: the bot on blip, the containers on hive-prod.
-func (c *Collector) readServices(s Sample, units []string) {
-	for _, unit := range units {
+func (c *Collector) readServices(s Sample) {
+	for _, unit := range c.services {
 		label, path := serviceLabel(unit), c.serviceDir(unit)
 		if path == "" {
 			continue

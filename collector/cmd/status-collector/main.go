@@ -6,8 +6,8 @@
 // project exists to fix. Docker's healthchecks reported green through a six-hour
 // outage because the thing reporting was accountable to nothing outside itself.
 // A collector that drifts silently is a monitor you cannot trust. This one
-// carries a version, says it on every report, and updates itself from a signed
-// release, so "what is running on blip" is a question with an answer.
+// carries a version, says it on every report, and updates itself from a
+// published release, so "what is running on blip" is a question with an answer.
 //
 // The second reason is that rates need memory. /proc/stat counts since boot, so
 // CPU-busy is only meaningful as a delta between two readings, and a script that
@@ -22,31 +22,23 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"log"
 	"os"
 	"os/signal"
-	"strings"
 	"syscall"
 	"time"
+
+	"github.com/basicallysource/status/collector/internal/host"
+	"github.com/basicallysource/status/collector/internal/report"
+	"github.com/basicallysource/status/collector/internal/selfupdate"
 )
 
 // version is set at build time with -ldflags. "dev" means somebody ran this
 // from a laptop, and it shows up on the status page as exactly that.
 var version = "dev"
-
-type Config struct {
-	Host       string        // the box's name; must match the token's host: scope
-	Token      string        // scoped credential, from the env file
-	StatusURL  string        // where reports go
-	Monitor    string        // optional: also send a service heartbeat for this monitor
-	Unit       string        // optional: the systemd unit whose liveness the heartbeat reports
-	Services   []string      // units or containers to record memory for
-	Disks      []string      // label=path pairs to measure
-	Interval   time.Duration //
-	UpdateFrom string        // GitHub repo to self-update from; empty disables
-}
 
 func main() {
 	once := flag.Bool("once", false, "collect and print one sample, then exit")
@@ -62,8 +54,8 @@ func main() {
 		return
 	}
 
-	cfg := loadConfig()
-	collector := NewCollector("/")
+	cfg := load()
+	collector := host.New(host.Options{Root: "/", Disks: cfg.disks, Services: cfg.services})
 
 	if *once {
 		// Twice, a second apart: the first reading has no previous counters to
@@ -71,26 +63,33 @@ func main() {
 		// like the rate readers were broken.
 		collector.Collect(time.Now())
 		time.Sleep(time.Second)
-		fmt.Println(prettyJSON(collector.sample(cfg, time.Now())))
+		fmt.Println(prettyJSON(sample(collector, time.Now())))
 		return
 	}
 
-	if cfg.Host == "" || cfg.Token == "" {
+	if cfg.host == "" || cfg.token == "" {
 		log.Fatal("HOST and BEAT_TOKEN are required; see collector/README.md")
 	}
-	log.Printf("status-collector %s reporting %s to %s every %s", version, cfg.Host, cfg.StatusURL, cfg.Interval)
+	log.Printf("status-collector %s reporting %s to %s every %s", version, cfg.host, cfg.statusURL, cfg.interval)
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 	run(ctx, cfg, collector)
 }
 
-func run(ctx context.Context, cfg Config, collector *Collector) {
-	reporter := NewReporter(cfg)
+func run(ctx context.Context, cfg config, collector *host.Collector) {
+	reporter := report.New(report.Options{
+		StatusURL: cfg.statusURL,
+		Host:      cfg.host,
+		Token:     cfg.token,
+		Monitor:   cfg.monitor,
+		Unit:      cfg.unit,
+		Version:   version,
+	})
 	// Prime the counters so the first report a minute from now carries rates.
 	collector.Collect(time.Now())
 
-	ticker := time.NewTicker(cfg.Interval)
+	ticker := time.NewTicker(cfg.interval)
 	defer ticker.Stop()
 
 	// Check for a new version shortly after starting, not a full interval
@@ -111,70 +110,30 @@ func run(ctx context.Context, cfg Config, collector *Collector) {
 			// spooled. A queue of stale samples replayed later would let a box
 			// that was dead for an hour backfill an hour of "I was fine", which
 			// is worse than the gap it fills — the gap is true.
-			reporter.Send(ctx, collector.sample(cfg, now))
+			reporter.Send(ctx, sample(collector, now))
 		case <-updates.C:
-			if cfg.UpdateFrom != "" {
-				selfUpdate(ctx, cfg.UpdateFrom)
+			if cfg.updateFrom != "" && selfupdate.Run(ctx, cfg.updateFrom, version) {
+				// Exit cleanly and let systemd start the new binary.
+				os.Exit(0)
 			}
-			updates.Reset(updateInterval)
+			updates.Reset(selfupdate.Interval)
 		}
 	}
 }
 
-// sample builds one report: everything read from the box, plus who and what
-// version is saying it.
-func (c *Collector) sample(cfg Config, now time.Time) Sample {
-	s := c.Collect(now)
-	c.readServices(s, cfg.Services)
-	s["cpus"] = numCPU()
-	// The collector's own version rides on every sample, which is what makes a
-	// drifted box visible instead of merely suspected.
+// sample is one report: everything read from the box, plus the version of the
+// thing saying it. The collector's own version rides on every sample, which is
+// what makes a drifted box visible instead of merely suspected.
+func sample(collector *host.Collector, now time.Time) host.Sample {
+	s := collector.Collect(now)
 	s["collector"] = version
 	return s
 }
 
-func loadConfig() Config {
-	cfg := Config{
-		Host:       env("HOST", ""),
-		Token:      env("BEAT_TOKEN", ""),
-		StatusURL:  strings.TrimSuffix(env("STATUS_URL", "https://status.basically.website"), "/"),
-		Monitor:    env("MONITOR", ""),
-		Unit:       env("UNIT", ""),
-		Services:   splitList(env("SERVICES", "")),
-		Disks:      splitList(env("DISKS", "disk=/")),
-		UpdateFrom: env("UPDATE_FROM", "basicallysource/status"),
+func prettyJSON(v any) string {
+	b, err := json.MarshalIndent(v, "", "  ")
+	if err != nil {
+		return fmt.Sprintf("%v", v)
 	}
-	cfg.Interval = 60 * time.Second
-	if d, err := time.ParseDuration(env("INTERVAL", "")); err == nil && d >= time.Second {
-		cfg.Interval = d
-	}
-	return cfg
-}
-
-// disks resolves the DISKS setting into label -> path.
-func (c *Collector) disks() map[string]string {
-	out := map[string]string{}
-	for _, item := range splitList(env("DISKS", "disk=/")) {
-		if label, path, ok := strings.Cut(item, "="); ok {
-			out[label] = path
-		}
-	}
-	return out
-}
-
-func splitList(raw string) []string {
-	var out []string
-	for _, part := range strings.Split(raw, ",") {
-		if part = strings.TrimSpace(part); part != "" {
-			out = append(out, part)
-		}
-	}
-	return out
-}
-
-func env(key, fallback string) string {
-	if v := strings.TrimSpace(os.Getenv(key)); v != "" {
-		return v
-	}
-	return fallback
+	return string(b)
 }

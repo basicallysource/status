@@ -1,6 +1,6 @@
 //go:build linux
 
-package main
+package host
 
 import "syscall"
 
@@ -11,7 +11,7 @@ import "syscall"
 // that costs real I/O — on a box already struggling for I/O, measuring it would
 // be part of the problem.
 func (c *Collector) readDiskUsage(s Sample) {
-	for label, path := range c.disks() {
+	for label, path := range c.disks {
 		var fs syscall.Statfs_t
 		if err := syscall.Statfs(path, &fs); err != nil {
 			continue

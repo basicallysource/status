@@ -61,7 +61,7 @@ jobs:
           # works until it doesn't.
           CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath \
             -ldflags "-s -w -X main.version=$version" \
-            -o status-collector-linux-amd64 .
+            -o status-collector-linux-amd64 ./cmd/status-collector
           sha256sum status-collector-linux-amd64 > status-collector-linux-amd64.sha256
           # The binary must agree about what it is, or a box's own smoke test
           # will reject it after downloading — better to fail here.

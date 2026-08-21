@@ -64,11 +64,25 @@ SERVICES=balloon-bot.service   # comma separated; units or container names
 DISKS=disk=/                   # comma separated label=path
 ```
 
+## Layout
+
+```
+cmd/status-collector/    the binary: config from the environment, and the tick loop
+internal/host/           reading a box: /proc, /sys, statfs. No network, no forks.
+internal/report/         sending a sample to the page. The only thing that knows the wire format.
+internal/selfupdate/     replacing this binary with a newer release, safely.
+install.sh               the one-time bootstrap
+```
+
+`internal/host` is the part worth keeping honest: it takes a root directory, so
+every reader in it runs against a fixture on a laptop, and the tests need no
+Linux box, no container, and no root.
+
 ## Running it
 
 ```bash
 go test ./...
-go run . --once      # collect twice a second apart, print, exit
+go run ./cmd/status-collector --once   # collect twice a second apart, print, exit
 ```
 
 `--once` samples twice on purpose: the first reading has nothing to subtract
@@ -86,8 +100,8 @@ box picks it up within 30 minutes: verify the checksum, run the new binary's own
 starts it. The outgoing binary is kept as `.prev`. A build made from a laptop
 (`version` is `dev`) is never replaced automatically — somebody is debugging.
 
-The one-time bootstrap is `install.sh`, which also retires the shell-script timer
-it replaces so a box never has two things reporting it.
+The one-time bootstrap is `install.sh`: copy it and the binary to a box, run it
+with `HOST=` set, and put a credential in `/etc/status-collector/collector.env`.
 
 ## Limits
 
