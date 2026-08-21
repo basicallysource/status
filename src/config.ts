@@ -70,7 +70,7 @@ export const MONITORS: Monitor[] = [
     //
     // The URL is permanent. It names a hash of its own contents, so nothing
     // can ever be served under it but these bytes.
-    url: 'https://basically-asset-service.nyc3.cdn.digitaloceanspaces.com/status/delivery-probe-8b81097c0140.txt',
+    url: 'https://assets.basically.website/status/delivery-probe-8b81097c0140.txt',
     expectBody: 'asset delivery is up',
     timeoutMs: 8000,
     description: 'Images and files on our sites. This is what pages load.',
