@@ -210,7 +210,7 @@ describe('board', () => {
     expect(card).toContain('Hive');
     expect(card).toContain('Outage');
     expect(card).toContain('· 99.10%');
-    expect(card).toContain('Responding in 110ms');
+    expect(card).toContain('Not responding');
   });
 
   it('links the page from inside the container', () => {

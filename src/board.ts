@@ -2,6 +2,7 @@ import { HISTORY_DAYS, SITE } from './config';
 import { kvGet, kvSetStmt } from './db';
 import { fmtDuration } from './monitor';
 import { COLOR } from './notify';
+import { PUBLIC_NOTE } from './publish';
 import type { DayCell, PageData, PageIncident, PageMonitor } from './page';
 import { Canvas, type RGBA } from './png';
 import type { Env, Status } from './types';
@@ -115,7 +116,15 @@ export function serviceLines(m: PageMonitor): string {
   // is computed once and this message may not be touched again for days.
   const held = m.since ? ` since ${ago(m.since)}` : '';
   const head = `**${m.name}** · ${LABEL[m.status]}${held} · ${m.uptime.toFixed(2)}%`;
-  const sub = [m.description, m.detail].filter(Boolean).join(' · ');
+  // The status NOTE, not the page's `detail`. That one carries the live
+  // response time, which changes on every check — putting it here made the
+  // card differ every minute and edit itself every minute, which is the exact
+  // cost the redraw check exists to avoid. A millisecond reading also has no
+  // business in a message that may not be touched for days: it would be a
+  // precise number that stopped being true almost immediately. It stays on the
+  // page, where it is live.
+  const note = m.status === 'up' ? '' : PUBLIC_NOTE[m.status];
+  const sub = [m.description, note].filter(Boolean).join(' · ');
   return sub ? `${head}\n-# ${sub}` : head;
 }
 
@@ -308,7 +317,7 @@ export function boardFingerprint(page: PageData): string {
   const services = page.monitors
     .map(
       (m) =>
-        `${m.group}/${m.name}:${m.status}:${m.detail}:${m.days.map((d) => d.status[0]).join('')}`,
+        `${m.group}/${m.name}:${m.status}:${m.days.map((d) => d.status[0]).join('')}`,
     )
     .join('|');
   return [FORMAT, LAYOUT_PROBE, page.overall, services, incidentLines(page.incidents).join('|')].join(
