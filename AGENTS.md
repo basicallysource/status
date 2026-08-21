@@ -7,8 +7,13 @@ The page is public and the repo should be publishable.
 - Service descriptions in `src/config.ts` are read by customers. No internal
   hostnames, no implementation detail, no "public X" phrasing that implies a
   private counterpart.
-- No private endpoints or infrastructure topology in committed files. That's why
-  the push endpoint is a secret, not a var in `wrangler.toml`.
+- No private endpoints or infrastructure topology in committed files. That is
+  why `ADMIN_ALERT_URL` is a secret rather than a var in `wrangler.toml`, and
+  why it holds the entire URL: a code that appends a known path to a secret
+  base still publishes half the address, and the half that describes it.
+- The same goes for what we send. `{title, message}` over a bearer token is the
+  shape of every notification service there has ever been, and that is the
+  point — nothing here should let a reader infer what is on the other end.
 - Comments give the engineering reason, not the incident history.
 
 Internal context — real hostnames, credential locations — is in the gitignored

@@ -87,19 +87,19 @@ export async function sendAlert(
     );
   }
 
-  if (env.PUSH_API && env.PUSH_TOKEN) {
+  if (env.ADMIN_ALERT_URL && env.ADMIN_ALERT_TOKEN) {
     jobs.push(
       post(
-        `${env.PUSH_API.replace(/\/$/, '')}/notify`,
+        env.ADMIN_ALERT_URL,
         {
           method: 'POST',
           headers: {
             'content-type': 'application/json',
-            authorization: `Bearer ${env.PUSH_TOKEN}`,
+            authorization: `Bearer ${env.ADMIN_ALERT_TOKEN}`,
           },
           body: JSON.stringify({ title, message: body }),
         },
-        'push',
+        'admin alert',
       ),
     );
   }

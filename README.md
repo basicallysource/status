@@ -197,6 +197,6 @@ secret is missing:
 | | |
 |---|---|
 | `BEAT_TOKEN` | the operator credential: manual ticks and box samples |
-| `PUSH_API`, `PUSH_TOKEN` | push notification endpoint and credential |
+| `ADMIN_ALERT_URL`, `ADMIN_ALERT_TOKEN` | a private endpoint an alert is POSTed to, and its bearer credential |
 | `DISCORD_ALERT_WEBHOOK` | a message per state change |
 | `DISCORD_BOARD_WEBHOOK` | one message, edited in place, mirroring the page |

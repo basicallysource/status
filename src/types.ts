@@ -80,7 +80,9 @@ export interface Env {
   DISCORD_ALERT_WEBHOOK?: string;
   /** Holds one message edited in place: the status page, mirrored. */
   DISCORD_BOARD_WEBHOOK?: string;
-  /** A private push-notification endpoint taking POST /notify {title, message}. */
-  PUSH_API?: string;
-  PUSH_TOKEN?: string;
+  /** Admin alert endpoint: a private URL that puts a message in front of an
+   *  operator. The whole URL is the secret, path included — this repo knows
+   *  only that it takes a POST and a bearer token. */
+  ADMIN_ALERT_URL?: string;
+  ADMIN_ALERT_TOKEN?: string;
 }
