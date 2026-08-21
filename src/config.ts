@@ -116,3 +116,14 @@ export const SITE = {
   title: 'basically Status',
   url: 'https://status.basically.website',
 };
+
+/**
+ * Cloudflare Web Analytics, on every HTML shell this worker serves.
+ *
+ * One constant rather than a line in each template, because there is no shared
+ * layout here and a second page added later would otherwise be untracked
+ * without anyone noticing. The beacon token is a public identifier — it is read
+ * out of the page source by every visitor's browser — so it belongs in the repo
+ * rather than in a secret.
+ */
+export const ANALYTICS = `<!-- Cloudflare Web Analytics --><script type='module' src='https://static.cloudflareinsights.com/beacon.min.js' data-cf-beacon='{"token": "e788b01334764a4cbd1e588411ce23df"}'></script><!-- End Cloudflare Web Analytics -->`;

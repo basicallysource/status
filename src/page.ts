@@ -1,4 +1,4 @@
-import { HISTORY_DAYS, SITE } from './config';
+import { ANALYTICS, HISTORY_DAYS, SITE } from './config';
 import { headline } from './board';
 import { fmtDuration } from './monitor';
 import type { Status } from './types';
@@ -147,6 +147,7 @@ export function renderPage(d: PageData): string {
 <meta name="color-scheme" content="light dark">
 <title>${esc(pageTitle(d.overall))}</title>
 <link rel="icon" type="image/svg+xml" href="/favicon.svg?s=${esc(d.overall)}">
+${ANALYTICS}
 <style>
 :root{--bg:#fbfbfa;--card:#fff;--fg:#1a1a19;--muted:#6f6f6b;--line:#e7e6e3;
   --up:#3ba55d;--degraded:#e6a817;--down:#ed4245;--maintenance:#4c6ef5;--unknown:#cbcac6}

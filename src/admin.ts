@@ -15,6 +15,8 @@
  * since June" is only useful next to what was shipped in June.
  */
 
+import { ANALYTICS } from './config';
+
 export function renderAdmin(): string {
   return `<!doctype html>
 <meta charset="utf-8">
@@ -22,6 +24,7 @@ export function renderAdmin(): string {
 <meta name="color-scheme" content="light dark">
 <title>Boxes · basically</title>
 <link rel="icon" type="image/svg+xml" href="/favicon.svg?s=up">
+${ANALYTICS}
 <style>
 :root{--bg:#fbfbfa;--card:#fff;--fg:#1a1a19;--muted:#6f6f6b;--line:#e7e6e3;
   --ink:#4c6ef5;--warn:#e6a817;--bad:#ed4245;--deploy:#b197fc}
