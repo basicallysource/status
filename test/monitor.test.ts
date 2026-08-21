@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { checkThresholds, fmtDuration, nextState, probeHeartbeat, probeHttp } from '../src/monitor';
-import { overall, renderBoard } from '../src/board';
+import { boardFingerprint, incidentLines, overall, statusCard } from '../src/board';
+import type { DayCell, PageData } from '../src/page';
+
 import { deployEvents, excused, isOpen, isSlow, typicalSeconds, type DeployRow } from '../src/deploy';
 import { allowed } from '../src/auth';
 import { alertText, worthAlerting } from '../src/notify';
@@ -14,6 +16,36 @@ import type {
   StateRow,
   Transition,
 } from '../src/types';
+
+/** A page with one service and ninety green days, for the board tests. */
+function samplePage(status: 'up' | 'down'): PageData {
+  const days: DayCell[] = Array.from({ length: 90 }, (_, i) => ({
+    day: `2026-01-${i}`,
+    up: 1,
+    down: 0,
+    total: 1,
+    pct: 100,
+    status: 'up',
+  }));
+  return {
+    now: 1000,
+    overall: status,
+    monitors: [
+      {
+        name: 'Hive',
+        group: 'Hive',
+        description: 'Machine sync.',
+        status,
+        since: 940,
+        detail: 'Responding in 110ms',
+        uptime: 99.1,
+        days,
+      },
+    ],
+    incidents: [],
+    deploys: [],
+  };
+}
 
 const mon: Monitor = { id: 'x', name: 'Balloon', kind: 'heartbeat' };
 
@@ -166,22 +198,68 @@ describe('board', () => {
     expect(overall([{ status: 'up' }, { status: 'up' }])).toBe('up');
   });
 
-  it('renders a line per service without a clock in it', () => {
-    const out = renderBoard(
-      [{ name: 'Hive', status: 'down', since: 940, detail: 'HTTP 502', uptime: 99.1 }],
-      1000,
-    );
-    expect(out).toContain('Hive');
-    expect(out).toContain('HTTP 502');
-    expect(out).toContain('99.10% 90d');
-    expect(out).toContain('1m');
+  it('says who, what state, and how long, without a clock in it', () => {
+    const page = samplePage('down');
+    const card = JSON.stringify(statusCard(page, ['a.png']));
+    expect(card).toContain('Hive');
+    expect(card).toContain('Outage');
+    expect(card).toContain('· 99.10%');
+    expect(card).toContain('Responding in 110ms');
   });
 
-  it('ends with a link to the page, in the description', () => {
-    const out = renderBoard([{ name: 'Hive', status: 'up', since: 0, detail: '', uptime: 100 }], 1000);
-    // Last line, and markdown — an embed footer renders neither, which is why
-    // this belongs to the description rather than beside the timestamp.
-    expect(out.split('\n').at(-1)).toBe('[status.basically.website](https://status.basically.website)');
+  it('links the page from inside the container', () => {
+    // Not the embed footer it used to live in: Discord renders no markdown
+    // there, so a link arrives as literal brackets.
+    expect(JSON.stringify(statusCard(samplePage('up'), ['a.png']))).toContain(
+      '[status.basically.website](https://status.basically.website)',
+    );
+  });
+
+  it('carries one bar image per service', () => {
+    const page = samplePage('up');
+    const card = statusCard(page, ['uptime-0.png']) as any;
+    const gallery = card.components[0].components.filter((c: any) => c.type === 12);
+    expect(gallery).toHaveLength(page.monitors.length);
+    expect(gallery[0].items[0].media.url).toBe('attachment://uptime-0.png');
+  });
+
+  it('redraws when a day cell changes colour, not only when a service does', () => {
+    const a = samplePage('up');
+    const b = samplePage('up');
+    b.monitors[0]!.days[3]!.status = 'down';
+    expect(boardFingerprint(a)).not.toBe(boardFingerprint(b));
+  });
+
+  it('does not redraw as time passes', () => {
+    const a = samplePage('up');
+    const b = { ...samplePage('up'), now: 999_999 };
+    expect(boardFingerprint(a)).toBe(boardFingerprint(b));
+  });
+
+  it('words an incident the way the page does: what, how long, when', () => {
+    const lines = incidentLines([
+      {
+        name: 'Hive API',
+        status: 'down',
+        started: 1_760_000_000,
+        ended: 1_760_000_600,
+        detail: 'Not responding',
+        duringUpdate: true,
+      },
+    ]);
+    expect(lines[0]).toBe(
+      '**Hive API** — Outage for 10m\n-# 2025-10-09 08:53 UTC · Not responding · during an update',
+    );
+  });
+
+  it('says ongoing rather than a duration that is wrong on arrival', () => {
+    // The message is only redrawn on a change, so "for 3m" would sit there
+    // being wrong for as long as the outage lasted.
+    const lines = incidentLines([
+      { name: 'Hive API', status: 'down', started: 1_760_000_000, ended: null, detail: null, duringUpdate: false },
+    ]);
+    expect(lines[0]).toContain('— ongoing');
+    expect(lines[0]).not.toContain('for ');
   });
 });
 

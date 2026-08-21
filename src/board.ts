@@ -1,16 +1,10 @@
-import { SITE } from './config';
+import { HISTORY_DAYS, SITE } from './config';
 import { kvGet, kvSetStmt } from './db';
 import { fmtDuration } from './monitor';
-import { COLOR, ICON } from './notify';
+import { COLOR } from './notify';
+import type { DayCell, PageData, PageIncident, PageMonitor } from './page';
+import { Canvas, type RGBA } from './png';
 import type { Env, Status } from './types';
-
-export interface BoardRow {
-  name: string;
-  status: Status;
-  since: number | null;
-  detail: string;
-  uptime: number;
-}
 
 const LABEL: Record<Status, string> = {
   up: 'Operational',
@@ -42,95 +36,335 @@ export function headline(status: Status): string {
           : 'Waiting for first checks';
 }
 
-/** The page, as one Discord message. Deliberately excludes any clock so an
- *  unchanged status does not churn an edit every minute. */
-export function renderBoard(rows: BoardRow[], nowSec: number): string {
-  const lines = rows.map((r) => {
-    const held = r.since ? ` · ${fmtDuration(nowSec - r.since)}` : '';
-    const why = r.status === 'up' ? '' : r.detail ? ` — ${r.detail}` : '';
-    return `${ICON[r.status]} **${r.name}** · ${LABEL[r.status]}${held}${why} · ${r.uptime.toFixed(2)}% 90d`;
-  });
-  // The embed title already links to the site, but a title that happens to be
-  // a link is not something anyone reads as "go here". A plain link on its own
-  // line is. It goes in the description because Discord renders no markdown in
-  // an embed footer — a link there arrives as literal brackets.
-  const host = SITE.url.replace(/^https?:\/\//, '');
-  return [...lines, '', `[${host}](${SITE.url})`].join('\n');
+// ------------------------------------------------------------------ the bars
+
+/**
+ * The page's own palette, dark-theme values.
+ *
+ * Discord has both themes and gives no way to know which the reader is in, so
+ * the strip is drawn on TRANSPARENT and every colour has to survive either
+ * background. The three status colours are saturated enough to. Grey is the
+ * one that cannot: a light grey vanishes on white and a dark one vanishes on
+ * black, so "no data" is a mid grey at partial alpha, which reads as absence
+ * on both instead of as a colour on one.
+ */
+const BAR: Record<Status, RGBA> = {
+  up: [70, 196, 110, 255],
+  degraded: [240, 180, 41, 255],
+  down: [242, 88, 91, 255],
+  maintenance: [107, 138, 253, 255],
+  unknown: [122, 122, 116, 115],
+};
+
+// Drawn at roughly twice the width Discord will show, so it lands as a retina
+// image rather than a soft one. Proportions match the page: a thin gap, a
+// slight round, a bar about seven times taller than it is wide.
+const BAR_W = 8;
+const BAR_GAP = 4;
+const BAR_H = 56;
+const BAR_R = 2;
+
+export function stripSize(dayCount: number): { width: number; height: number } {
+  return { width: Math.max(1, dayCount * (BAR_W + BAR_GAP) - BAR_GAP), height: BAR_H };
 }
 
-async function send(env: Env, body: unknown, messageId: string | null): Promise<string | null> {
-  const base = env.DISCORD_BOARD_WEBHOOK!;
-  if (messageId) {
-    const res = await fetch(`${base}/messages/${messageId}`, {
-      method: 'PATCH',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(body),
-    });
-    if (res.ok) return messageId;
-    // 404/410 means someone deleted it; fall through and post a fresh one.
-    if (res.status !== 404 && res.status !== 410) {
-      throw new Error(`board edit ${res.status}: ${(await res.text()).slice(0, 200)}`);
-    }
-  }
-  const res = await fetch(`${base}?wait=true`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify(body),
+/** One service's history as a bar chart, PNG bytes. */
+export async function uptimeStrip(days: DayCell[]): Promise<Uint8Array> {
+  const { width, height } = stripSize(days.length);
+  const canvas = new Canvas(width, height);
+  days.forEach((d, i) => {
+    canvas.fillRounded(i * (BAR_W + BAR_GAP), 0, BAR_W, height, BAR_R, BAR[d.status]);
   });
+  return canvas.toPng();
+}
+
+// ------------------------------------------------------------------ the card
+
+/** Discord component type ids. */
+const TEXT = 10;
+const GALLERY = 12;
+const SEPARATOR = 14;
+const CONTAINER = 17;
+/** IS_COMPONENTS_V2. Without it Discord rejects `components` at top level. */
+const V2_FLAG = 1 << 15;
+
+/**
+ * The board's shape, as a version string.
+ *
+ * A Discord message created with embeds CANNOT be edited into a components-v2
+ * message — the API refuses the conversion — so a layout change of that kind
+ * has to delete and repost rather than edit. This marker is how the worker
+ * knows which kind of message it is holding an id for.
+ */
+const FORMAT = 'v2-1';
+
+const text = (content: string) => ({ type: TEXT, content });
+const separator = (spacing: 1 | 2 = 1) => ({ type: SEPARATOR, divider: true, spacing });
+
+/**
+ * One service, in the two lines the page gives it.
+ *
+ * The page can afford a legend under every chart — "90 days ago · 96.73 %
+ * uptime · Today" — because it has the width. Discord does not, and three
+ * lines per service turns four services into a wall. So the percentage joins
+ * the status line, the description and the probe's own reading share the small
+ * line, and the range is stated once in the footer instead of four times.
+ */
+export function serviceLines(m: PageMonitor, nowSec: number): string {
+  const held = m.since ? ` · ${fmtDuration(nowSec - m.since)}` : '';
+  const head = `**${m.name}** · ${LABEL[m.status]}${held} · ${m.uptime.toFixed(2)}%`;
+  const sub = [m.description, m.detail].filter(Boolean).join(' · ');
+  return sub ? `${head}\n-# ${sub}` : head;
+}
+
+const host = SITE.url.replace(/^https?:\/\//, '');
+
+/**
+ * The bottom message: the page, as a card.
+ *
+ * A components-v2 Container, not an embed, for one reason that matters — its
+ * `accent_color` is the full-height bar down the side, which is the closest
+ * Discord has to the page's banner. An embed's colour is the same stripe but
+ * an embed cannot hold an image per row, and the bars are the point.
+ */
+export function statusCard(page: PageData, files: string[]) {
+  const inner: unknown[] = [text(`## ${headline(page.overall)}`)];
+  let group = '';
+  page.monitors.forEach((m, i) => {
+    if (m.group !== group) {
+      group = m.group;
+      inner.push(separator(2));
+      inner.push(text(`### ${group}`));
+    } else {
+      inner.push(separator(1));
+    }
+    inner.push(text(serviceLines(m, page.now)));
+    inner.push({ type: GALLERY, items: [{ media: { url: `attachment://${files[i]}` } }] });
+  });
+  inner.push(separator(2));
+  inner.push(
+    text(
+      `-# Each bar is one day, ${HISTORY_DAYS} days to today · checked every minute · [${host}](${SITE.url})`,
+    ),
+  );
+  return {
+    flags: V2_FLAG,
+    components: [{ type: CONTAINER, accent_color: COLOR[page.overall], components: inner }],
+  };
+}
+
+/** Same stamp the page prints under an incident. */
+const utcMinute = (ts: number) =>
+  `${new Date(ts * 1000).toISOString().replace('T', ' ').slice(0, 16)} UTC`;
+
+/**
+ * The message ABOVE the card: what has actually gone wrong lately.
+ *
+ * Its own message, and posted first so it sits above, because the two answer
+ * different questions and change on different clocks. "Is it up right now" is
+ * the thing someone scrolls to the bottom for, so it has to be the last
+ * message in the channel; "what happened this month" is history and belongs
+ * over it.
+ */
+export function incidentLines(incidents: PageIncident[], limit = 6): string[] {
+  return incidents.slice(0, limit).map((i) => {
+    // "for 1m" while it is running would be a number that is already wrong by
+    // the time anyone reads it, and this message is only redrawn on a change.
+    const lasted = i.ended ? `for ${fmtDuration(i.ended - i.started)}` : '— ongoing';
+    const during = i.duringUpdate ? ' · during an update' : '';
+    return `**${i.name}** — ${LABEL[i.status]} ${lasted}\n-# ${utcMinute(i.started)}${i.detail ? ` · ${i.detail}` : ''}${during}`;
+  });
+}
+
+function incidentCard(page: PageData) {
+  const lines = incidentLines(page.incidents);
+  const body = lines.length
+    ? lines.join('\n')
+    : `-# Nothing recorded in the last ${HISTORY_DAYS} days.`;
+  return {
+    flags: V2_FLAG,
+    components: [
+      {
+        // Deliberately not the overall status colour. This message is history,
+        // and painting it red because something is down right now would say
+        // the past went wrong too.
+        type: CONTAINER,
+        accent_color: COLOR.unknown,
+        components: [text('### Recent incidents'), separator(1), text(body)],
+      },
+    ],
+  };
+}
+
+// ------------------------------------------------------------------ delivery
+
+async function sendMultipart(
+  url: string,
+  method: 'POST' | 'PATCH',
+  payload: unknown,
+  files: { name: string; bytes: Uint8Array }[],
+): Promise<Response> {
+  const form = new FormData();
+  form.append(
+    'payload_json',
+    JSON.stringify({
+      ...(payload as object),
+      // On an edit this list REPLACES what the message carries. Sending it
+      // every time is what keeps a stale strip from surviving a redraw.
+      attachments: files.map((f, i) => ({ id: i, filename: f.name })),
+    }),
+  );
+  files.forEach((f, i) => {
+    form.append(`files[${i}]`, new Blob([f.bytes], { type: 'image/png' }), f.name);
+  });
+  return fetch(url, { method, body: form });
+}
+
+/** Returns the message id, or null if Discord would not give one back. */
+async function postMessage(
+  webhook: string,
+  payload: unknown,
+  files: { name: string; bytes: Uint8Array }[],
+): Promise<string | null> {
+  const res = await sendMultipart(`${webhook}?wait=true`, 'POST', payload, files);
   if (!res.ok) throw new Error(`board post ${res.status}: ${(await res.text()).slice(0, 200)}`);
   return ((await res.json()) as { id?: string }).id ?? null;
 }
 
+/** True if the edit landed. False means the message is gone and must be reposted. */
+async function editMessage(
+  webhook: string,
+  id: string,
+  payload: unknown,
+  files: { name: string; bytes: Uint8Array }[],
+): Promise<boolean> {
+  const res = await sendMultipart(`${webhook}/messages/${id}`, 'PATCH', payload, files);
+  if (res.ok) return true;
+  if (res.status === 404 || res.status === 410) return false;
+  throw new Error(`board edit ${res.status}: ${(await res.text()).slice(0, 200)}`);
+}
+
+async function deleteMessage(webhook: string, id: string): Promise<void> {
+  await fetch(`${webhook}/messages/${id}`, { method: 'DELETE' }).catch(() => undefined);
+}
+
 /**
- * One row rendered at a fixed instant, so the string changes when the LAYOUT
- * changes and not when time passes. Folding it into the fingerprint is what
- * makes an edit to renderBoard reach the card.
+ * Everything that decides whether the card needs redrawing.
  *
- * Without it the fingerprint was only status-per-service, so a redesign of the
- * board sat in the worker until some service happened to go down — the card
- * kept its old shape and nothing looked broken, which is the bad kind of quiet.
- * Fingerprinting the real description instead would redraw every minute, since
- * durations and uptimes move constantly; that cost is what the fingerprint
- * exists to avoid.
+ * Not the rendered card: durations and uptimes move every minute and would
+ * force an edit every minute, which is the cost this exists to avoid. Not
+ * status alone either — the bars are half the card, so a day-cell changing
+ * colour has to count, and so does a change to the LAYOUT, which is why one
+ * row rendered at a fixed instant is folded in. Without that last part an edit
+ * to this file reaches the card only the next time something breaks.
  */
-const FORMAT_PROBE = renderBoard(
-  [{ name: 'probe', status: 'up', since: 0, detail: '', uptime: 100 }],
-  0,
-);
+const LAYOUT_PROBE = JSON.stringify([
+  statusCard(
+    {
+      now: 0,
+      overall: 'up',
+      monitors: [
+        {
+          name: 'probe',
+          group: 'probe',
+          description: 'probe',
+          status: 'up',
+          since: 0,
+          detail: 'probe',
+          uptime: 100,
+          days: [],
+        },
+      ],
+      incidents: [],
+      deploys: [],
+    },
+    ['probe.png'],
+  ),
+  incidentCard({
+    now: 0,
+    overall: 'up',
+    monitors: [],
+    incidents: [{ name: 'probe', status: 'down', started: 0, ended: 60, detail: 'probe', duringUpdate: false }],
+    deploys: [],
+  }),
+]);
+
+export function boardFingerprint(page: PageData): string {
+  const services = page.monitors
+    .map(
+      (m) =>
+        `${m.group}/${m.name}:${m.status}:${m.detail}:${m.days.map((d) => d.status[0]).join('')}`,
+    )
+    .join('|');
+  return [FORMAT, LAYOUT_PROBE, page.overall, services, incidentLines(page.incidents).join('|')].join(
+    '\n',
+  );
+}
 
 /**
- * Mirrors the page into one Discord message, edited in place. Only when the
- * content actually changed — an unchanged board costs nothing.
+ * Mirrors the page into two Discord messages, edited in place: incidents above,
+ * live status below. Only when something actually changed.
  */
-export async function syncBoard(env: Env, rows: BoardRow[], nowSec: number): Promise<'skipped' | 'synced'> {
-  if (!env.DISCORD_BOARD_WEBHOOK) return 'skipped';
+export async function syncBoard(env: Env, page: PageData): Promise<'skipped' | 'synced'> {
+  const webhook = env.DISCORD_BOARD_WEBHOOK;
+  if (!webhook) return 'skipped';
 
-  const status = overall(rows);
-  const description = renderBoard(rows, nowSec);
-  const fingerprint = `${status}\n${FORMAT_PROBE}\n${rows.map((r) => `${r.name}:${r.status}`).join('|')}`;
-
-  const [prev, messageId] = await Promise.all([
+  const fingerprint = boardFingerprint(page);
+  const [prev, format, incidentId, statusId] = await Promise.all([
     kvGet(env.DB, 'board:fingerprint'),
+    kvGet(env.DB, 'board:format'),
+    kvGet(env.DB, 'board:incidents'),
     kvGet(env.DB, 'board:message'),
   ]);
-  if (prev === fingerprint && messageId) return 'skipped';
+  if (prev === fingerprint && format === FORMAT && incidentId && statusId) return 'skipped';
 
-  const body = {
-    embeds: [
-      {
-        title: `${ICON[status]} ${headline(status)}`,
-        description,
-        color: COLOR[status],
-        url: SITE.url,
-        timestamp: new Date(nowSec * 1000).toISOString(),
-        footer: { text: 'Updated when something changes · checked every minute' },
-      },
-    ],
-  };
+  const files = await Promise.all(
+    page.monitors.map(async (m, i) => ({
+      name: `uptime-${i}.png`,
+      bytes: await uptimeStrip(m.days),
+    })),
+  );
+  const status = statusCard(page, files.map((f) => f.name));
+  const incidents = incidentCard(page);
 
-  const id = await send(env, body, messageId);
-  const writes = [kvSetStmt(env.DB, 'board:fingerprint', fingerprint)];
-  if (id && id !== messageId) writes.push(kvSetStmt(env.DB, 'board:message', id));
+  // A message made of embeds cannot become a components-v2 message, so a
+  // format change is a repost rather than an edit. Order is the reason both go
+  // at once: the card has to end up BELOW, and the only way to guarantee that
+  // is to post them in order into an empty slot.
+  let ids: { incidents: string | null; status: string | null } = { incidents: incidentId, status: statusId };
+  const stale = format !== FORMAT || !incidentId || !statusId;
+  if (stale) {
+    if (incidentId) await deleteMessage(webhook, incidentId);
+    if (statusId) await deleteMessage(webhook, statusId);
+    ids = { incidents: null, status: null };
+  }
+
+  if (ids.incidents && ids.status) {
+    const ok =
+      (await editMessage(webhook, ids.incidents, incidents, [])) &&
+      (await editMessage(webhook, ids.status, status, files));
+    if (!ok) {
+      // One of them was deleted by hand. Clear both and fall through, so the
+      // pair is reposted in the right order rather than leaving the card on top.
+      await deleteMessage(webhook, ids.incidents);
+      await deleteMessage(webhook, ids.status);
+      ids = { incidents: null, status: null };
+    }
+  }
+
+  if (!ids.incidents || !ids.status) {
+    ids = {
+      incidents: await postMessage(webhook, incidents, []),
+      status: await postMessage(webhook, status, files),
+    };
+  }
+
+  const writes = [
+    kvSetStmt(env.DB, 'board:fingerprint', fingerprint),
+    kvSetStmt(env.DB, 'board:format', FORMAT),
+  ];
+  if (ids.incidents) writes.push(kvSetStmt(env.DB, 'board:incidents', ids.incidents));
+  if (ids.status) writes.push(kvSetStmt(env.DB, 'board:message', ids.status));
   await env.DB.batch(writes);
   return 'synced';
 }

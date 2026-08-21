@@ -1,5 +1,5 @@
 import { HISTORY_DAYS, HOST_QUERY_MAX_HOURS, MONITORS, MONITOR_BY_ID } from './config';
-import { overall, syncBoard, type BoardRow } from './board';
+import { overall, syncBoard } from './board';
 import {
   abandonDeployStmt,
   backfillDownStmt,
@@ -125,35 +125,15 @@ export async function tick(env: Env, nowSec = Math.floor(Date.now() / 1000)) {
       .map(({ i, t }) => sendAlert(env, MONITORS[i], t, observations[i], nowSec)),
   );
 
-  // The board is a mirror of the page, so it says what the page says. Alerts
-  // are the other channel and still carry the cause — an alert without one is
-  // just a bell.
-  const board: BoardRow[] = rows.map((r, i) => ({
-    name: MONITORS[i].name,
-    status: r.status,
-    since: r.since,
-    detail: r.status === 'up' ? '' : PUBLIC_NOTE[r.status],
-    uptime: 0,
-  }));
-  await syncBoard(env, await withUptime(env, board, nowSec), nowSec).catch((e) =>
-    console.error('board sync:', e),
-  );
+  // The board is the page, mirrored — so it is built from the page itself
+  // rather than from a parallel shape assembled here. The version this replaced
+  // rebuilt a cut-down row list and ran its own history query to get uptime,
+  // which meant two places deciding what a service's numbers were. Alerts are
+  // the other channel and still carry the cause; an alert without one is just a
+  // bell.
+  await syncBoard(env, await buildPage(env, nowSec)).catch((e) => console.error('board sync:', e));
 
   return { checked: rows.length, changed: alerts.length };
-}
-
-async function withUptime(env: Env, board: BoardRow[], nowSec: number): Promise<BoardRow[]> {
-  const hist = await history(env.DB, dayKey(nowSec - HISTORY_DAYS * 86400));
-  return board.map((b, i) => {
-    const h = hist[MONITORS[i].id] ?? {};
-    let up = 0;
-    let total = 0;
-    for (const v of Object.values(h)) {
-      up += v.up;
-      total += v.up + v.down;
-    }
-    return { ...b, uptime: total ? (up / total) * 100 : 100 };
-  });
 }
 
 function dayCell(day: string, up: number, down: number): DayCell {
