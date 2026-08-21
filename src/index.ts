@@ -131,9 +131,17 @@ export async function tick(env: Env, nowSec = Math.floor(Date.now() / 1000)) {
   // which meant two places deciding what a service's numbers were. Alerts are
   // the other channel and still carry the cause; an alert without one is just a
   // bell.
-  await syncBoard(env, await buildPage(env, nowSec)).catch((e) => console.error('board sync:', e));
+  // The board result is returned rather than only logged. A forced tick is an
+  // operator asking "did that work", and the board is the half of the answer
+  // that lives on someone else's server: Discord can reject a payload the
+  // worker was perfectly happy to build, and a console line nobody is tailing
+  // is not a report.
+  const board = await syncBoard(env, await buildPage(env, nowSec)).catch((e) => {
+    console.error('board sync:', e);
+    return `error: ${e instanceof Error ? e.message : String(e)}`;
+  });
 
-  return { checked: rows.length, changed: alerts.length };
+  return { checked: rows.length, changed: alerts.length, board };
 }
 
 function dayCell(day: string, up: number, down: number): DayCell {
