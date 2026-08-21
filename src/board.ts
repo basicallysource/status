@@ -110,8 +110,10 @@ const separator = (spacing: 1 | 2 = 1) => ({ type: SEPARATOR, divider: true, spa
  * the status line, the description and the probe's own reading share the small
  * line, and the range is stated once in the footer instead of four times.
  */
-export function serviceLines(m: PageMonitor, nowSec: number): string {
-  const held = m.since ? ` · ${fmtDuration(nowSec - m.since)}` : '';
+export function serviceLines(m: PageMonitor): string {
+  // "since 8 hours ago" rather than the page's "8h 26m", because that number
+  // is computed once and this message may not be touched again for days.
+  const held = m.since ? ` since ${ago(m.since)}` : '';
   const head = `**${m.name}** · ${LABEL[m.status]}${held} · ${m.uptime.toFixed(2)}%`;
   const sub = [m.description, m.detail].filter(Boolean).join(' · ');
   return sub ? `${head}\n-# ${sub}` : head;
@@ -138,7 +140,7 @@ export function statusCard(page: PageData, files: string[]) {
     } else {
       inner.push(separator(1));
     }
-    inner.push(text(serviceLines(m, page.now)));
+    inner.push(text(serviceLines(m)));
     inner.push({ type: GALLERY, items: [{ media: { url: `attachment://${files[i]}` } }] });
   });
   inner.push(separator(2));
@@ -153,9 +155,21 @@ export function statusCard(page: PageData, files: string[]) {
   };
 }
 
-/** Same stamp the page prints under an incident. */
-const utcMinute = (ts: number) =>
-  `${new Date(ts * 1000).toISOString().replace('T', ' ').slice(0, 16)} UTC`;
+/**
+ * Discord's own timestamp markup. `f` is the reader's local date and time in
+ * their locale, `R` is "8 hours ago".
+ *
+ * Two reasons this beats the UTC string the page prints. The page has one
+ * reader at a time looking at a clock; a channel has everyone, in their own
+ * zones, and nobody should have to convert. And these RE-RENDER on the
+ * reader's client every time they look, which matters more here than anywhere
+ * else: the board is only redrawn when something CHANGES, so any duration
+ * baked into the text at render time would be wrong for however long the
+ * status held. A relative stamp is the one kind of clock that stays right in a
+ * message nobody is editing.
+ */
+const at = (ts: number) => `<t:${Math.floor(ts)}:f>`;
+const ago = (ts: number) => `<t:${Math.floor(ts)}:R>`;
 
 /**
  * The message ABOVE the card: what has actually gone wrong lately.
@@ -170,9 +184,10 @@ export function incidentLines(incidents: PageIncident[], limit = 6): string[] {
   return incidents.slice(0, limit).map((i) => {
     // "for 1m" while it is running would be a number that is already wrong by
     // the time anyone reads it, and this message is only redrawn on a change.
+    // A span, so it stays a duration — Discord has markup for instants only.
     const lasted = i.ended ? `for ${fmtDuration(i.ended - i.started)}` : '— ongoing';
     const during = i.duringUpdate ? ' · during an update' : '';
-    return `**${i.name}** — ${LABEL[i.status]} ${lasted}\n-# ${utcMinute(i.started)}${i.detail ? ` · ${i.detail}` : ''}${during}`;
+    return `**${i.name}** — ${LABEL[i.status]} ${lasted}\n-# ${at(i.started)} · ${ago(i.started)}${i.detail ? ` · ${i.detail}` : ''}${during}`;
   });
 }
 

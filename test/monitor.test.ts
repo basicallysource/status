@@ -198,6 +198,12 @@ describe('board', () => {
     expect(overall([{ status: 'up' }, { status: 'up' }])).toBe('up');
   });
 
+  it('dates the held status with a stamp that keeps itself right', () => {
+    // Baked "8h 26m" would be wrong for as long as the status held, and this
+    // card is only redrawn on a change.
+    expect(JSON.stringify(statusCard(samplePage('up'), ['a.png']))).toContain('since <t:940:R>');
+  });
+
   it('says who, what state, and how long, without a clock in it', () => {
     const page = samplePage('down');
     const card = JSON.stringify(statusCard(page, ['a.png']));
@@ -247,8 +253,11 @@ describe('board', () => {
         duringUpdate: true,
       },
     ]);
+    // Discord markup, not a UTC string: the channel has readers in several
+    // zones, and these re-render on their client so they never go stale in a
+    // message that is only edited when something changes.
     expect(lines[0]).toBe(
-      '**Hive API** — Outage for 10m\n-# 2025-10-09 08:53 UTC · Not responding · during an update',
+      '**Hive API** — Outage for 10m\n-# <t:1760000000:f> · <t:1760000000:R> · Not responding · during an update',
     );
   });
 
