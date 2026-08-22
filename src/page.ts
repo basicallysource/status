@@ -1,6 +1,7 @@
 import { ANALYTICS, HISTORY_DAYS, SITE } from './config';
 import { headline } from './board';
 import { fmtDuration } from './monitor';
+import { relativeTime, utcTime } from './time';
 import type { Status } from './types';
 
 export interface DayCell {
@@ -66,7 +67,14 @@ const esc = (s: unknown): string =>
     (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!,
   );
 
-const utc = (ts: number) => `${new Date(ts * 1000).toISOString().replace('T', ' ').slice(0, 16)} UTC`;
+const timestamp = (ts: number, now: number): string => {
+  const whole = Math.floor(ts);
+  return `<time class="stamp" datetime="${new Date(whole * 1000).toISOString()}" data-ts="${whole}">
+    <span>UTC: ${esc(utcTime(whole))}</span><span class="time-sep"> · </span>
+    <span data-local>Your time: loading…</span><span class="time-sep"> · </span>
+    <span data-relative>${esc(relativeTime(whole, now))}</span>
+  </time>`;
+};
 
 const bar = (d: DayCell) =>
   `<i class="b ${d.status}" title="${esc(
@@ -82,7 +90,7 @@ const row = (m: PageMonitor, now: number) => `
     </div>
     <div class="right">
       <div class="${m.status}">${LABEL[m.status]}</div>
-      ${m.since ? `<div class="sub">${esc(fmtDuration(now - m.since))}</div>` : ''}
+      ${m.since ? `<div class="sub state-time">Since ${timestamp(m.since, now)}</div>` : ''}
     </div>
   </div>
   <div class="bars">${m.days.map(bar).join('')}</div>
@@ -107,20 +115,26 @@ const incident = (i: PageIncident, now: number) => `
     <div><strong>${esc(i.name)}</strong> — ${LABEL[i.status]} for ${esc(
       fmtDuration((i.ended ?? now) - i.started),
     )}${i.ended ? '' : ' <em>(ongoing)</em>'}</div>
-    <div class="sub">${esc(utc(i.started))}${i.detail ? ` · ${esc(i.detail)}` : ''}${
-      i.duringUpdate ? ' · during an update' : ''
-    }</div>
+    <div class="sub event-time">Started ${timestamp(i.started, now)}</div>
+    ${i.ended ? `<div class="sub event-time">Ended ${timestamp(i.ended, now)}</div>` : ''}
+    ${
+      i.detail || i.duringUpdate
+        ? `<div class="sub">${i.detail ? esc(i.detail) : ''}${
+            i.detail && i.duringUpdate ? ' · ' : ''
+          }${i.duringUpdate ? 'during an update' : ''}</div>`
+        : ''
+    }
   </div>
 </li>`;
 
-const deploy = (d: PageDeploy) => `
+const deploy = (d: PageDeploy, now: number) => `
 <li>
   <span class="pip ${d.ended === null ? 'maintenance' : 'up'}"></span>
   <div>
     <div><strong>${esc(d.name)}</strong> was updated${
       d.ended === null ? ' — <em>in progress</em>' : ''
     }</div>
-    <div class="sub">${esc(utc(d.started))}</div>
+    <div class="sub event-time">${d.ended === null ? 'Started' : 'Updated'} ${timestamp(d.started, now)}</div>
   </div>
 </li>`;
 
@@ -173,6 +187,9 @@ h2{font-size:12px;font-weight:600;letter-spacing:.04em;
 .name{font-weight:550}
 .desc,.sub{color:var(--muted);font-size:12.5px}
 .right{text-align:right;flex:none;font-size:13px;font-weight:550}
+.state-time{max-width:430px;font-weight:400}
+.stamp{font-variant-numeric:tabular-nums}
+.event-time+.event-time{margin-top:2px}
 /* Scoped to .right on purpose: a bare .up would also repaint the banner's
    white text green, on a green background. */
 .right .up{color:var(--up)}.right .degraded{color:var(--degraded)}
@@ -197,7 +214,8 @@ li{display:flex;gap:10px;background:var(--card);border:1px solid var(--line);
 footer{margin-top:36px;color:var(--muted);font-size:12px;display:flex;
   justify-content:space-between;gap:12px;flex-wrap:wrap}
 a{color:inherit}
-@media(max-width:520px){main{padding:32px 16px 56px}.desc{display:none}}
+@media(max-width:520px){main{padding:32px 16px 56px}.desc{display:none}
+  .head{display:block}.right{text-align:left;margin-top:8px}.state-time{max-width:none}}
 </style>
 <main>
   <h1>${esc(SITE.title)}</h1>
@@ -215,12 +233,12 @@ a{color:inherit}
     d.deploys.length
       ? `<h2>Recent updates</h2><ul>${d.deploys
           .slice(0, 8)
-          .map(deploy)
+          .map((x) => deploy(x, d.now))
           .join('')}</ul>`
       : ''
   }
   <footer>
-    <span>Checked every minute · updated ${esc(utc(d.now))}</span>
+    <span>Checked every minute · updated ${timestamp(d.now, d.now)}</span>
     <span><a href="/api/status">JSON</a></span>
   </footer>
 </main>
@@ -229,6 +247,36 @@ a{color:inherit}
 // the server stays the only thing that knows how to draw a status.
 (function () {
   var busy = false;
+  function relative(ts) {
+    var delta = Math.round(Date.now() / 1000 - ts);
+    var seconds = Math.abs(delta);
+    if (seconds < 5) return 'just now';
+    var units = [['year', 31536000], ['month', 2592000], ['day', 86400],
+      ['hour', 3600], ['minute', 60], ['second', 1]];
+    var parts = [], left = seconds;
+    for (var i = 0; i < units.length; i++) {
+      var name = units[i][0], size = units[i][1], count = Math.floor(left / size);
+      if (!count && !parts.length) continue;
+      if (count) {
+        parts.push(count + ' ' + name + (count === 1 ? '' : 's'));
+        left -= count * size;
+      }
+      if (parts.length === 2) break;
+    }
+    var said = parts.join(' ') || 'less than a second';
+    return delta >= 0 ? said + ' ago' : 'in ' + said;
+  }
+  function hydrateTimes(root) {
+    root.querySelectorAll('time[data-ts]').forEach(function (node) {
+      var ts = Number(node.dataset.ts);
+      var local = new Date(ts * 1000).toLocaleString(undefined, {
+        year: 'numeric', month: 'short', day: 'numeric', hour: 'numeric',
+        minute: '2-digit', timeZoneName: 'short'
+      });
+      node.querySelector('[data-local]').textContent = 'Your time: ' + local;
+      node.querySelector('[data-relative]').textContent = relative(ts);
+    });
+  }
   async function refresh() {
     if (busy || document.hidden) return;
     busy = true;
@@ -237,7 +285,10 @@ a{color:inherit}
       if (!res.ok) return;
       var doc = new DOMParser().parseFromString(await res.text(), 'text/html');
       var next = doc.querySelector('main');
-      if (next) document.querySelector('main').replaceWith(next);
+      if (next) {
+        document.querySelector('main').replaceWith(next);
+        hydrateTimes(document);
+      }
       if (doc.title) document.title = doc.title;
       var from = doc.querySelector('link[rel="icon"]');
       var to = document.querySelector('link[rel="icon"]');
@@ -253,7 +304,9 @@ a{color:inherit}
       busy = false;
     }
   }
+  hydrateTimes(document);
   setInterval(refresh, 30000);
+  setInterval(function () { hydrateTimes(document); }, 30000);
   // Catch up immediately when the tab comes back, instead of showing something
   // stale until the next interval.
   document.addEventListener('visibilitychange', function () {

@@ -9,11 +9,10 @@ import (
 
 // Per-service memory, read straight out of cgroup v2.
 //
-// This is the reader that earns the whole program. On 2026-08-20 hive-backend
-// leaked to 2.2 GB on a 3.9 GB box and served 502s for six hours, and the
-// box-level number would have shown a busy machine without saying which process
-// was eating it. `memory.current` for one unit says exactly that, and it is a
-// file read — no docker API call, no `ps` sweep, no fork.
+// This is the reader that earns the whole program. A box-level memory number
+// shows a busy machine without saying which process is consuming it;
+// `memory.current` for one configured unit answers that directly, with a file
+// read — no docker API call, no `ps` sweep, no fork.
 //
 // It also carries `memory.events`, where the kernel counts how many times this
 // cgroup hit its own limit. A service being repeatedly OOM-killed inside its
@@ -27,7 +26,7 @@ const cgroupRoot = "sys/fs/cgroup"
 //
 // Names are given in config rather than discovered, because "every cgroup on the
 // box" is hundreds of rows a minute of mostly nothing, and the handful that
-// matter are known: the bot on blip, the containers on hive-prod.
+// matter are known from this collector's private SERVICES configuration.
 func (c *Collector) readServices(s Sample) {
 	for _, unit := range c.services {
 		label, path := serviceLabel(unit), c.serviceDir(unit)
@@ -59,7 +58,7 @@ func (c *Collector) readServices(s Sample) {
 // if it is not running. A stopped service has no cgroup at all, which is why an
 // absent key here means "not running" rather than "zero bytes".
 func (c *Collector) serviceDir(unit string) string {
-	// A systemd service: balloon-bot.service.
+  // A systemd service: example.service.
 	candidate := filepath.Join(cgroupRoot, "system.slice", unit)
 	if fi, err := os.Stat(c.path(candidate)); err == nil && fi.IsDir() {
 		return candidate
@@ -109,7 +108,7 @@ func (c *Collector) dockerContainers() map[string]string {
 }
 
 // serviceLabel turns a unit name into something safe to use as a metric key:
-// "balloon-bot.service" -> "balloon_bot".
+// "example-worker.service" -> "example_worker".
 func serviceLabel(unit string) string {
 	name := strings.TrimSuffix(strings.TrimSuffix(unit, ".service"), ".scope")
 	return strings.NewReplacer("-", "_", ".", "_", "/", "_").Replace(name)

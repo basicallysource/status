@@ -28,6 +28,7 @@ import {
 import { authorize, isOperator } from './auth';
 import { blame, deployEvents, excused, isSlow, typicalSeconds } from './deploy';
 import { fmtDuration, nextState, parseMeta, probe } from './monitor';
+import { hostServices } from './inventory';
 import { sendAlert, worthAlerting } from './notify';
 import { faviconSvg } from './favicon';
 import { renderAdmin } from './admin';
@@ -248,9 +249,8 @@ async function readMetrics(req: Request): Promise<Record<string, unknown> | null
  * A box reporting on itself: load, memory, swap, uptime.
  *
  * Scoped as `host:<name>` rather than as a service, because a box is not a
- * service — hive-prod runs hive, but "hive-prod is at 91% memory" is an
- * engineering fact and "hive is down" is a customer one. Nothing posted here
- * reaches the public page.
+ * service — host resource use is an engineering fact and service availability
+ * is a customer one. Nothing posted here reaches the public page.
  */
 async function handleHost(req: Request, env: Env, host: string): Promise<Response> {
   if (!/^[a-z0-9][a-z0-9._-]{0,63}$/i.test(host)) return json({ error: 'bad host name' }, 400);
@@ -366,7 +366,7 @@ export default {
     // ------------------------------------------------------------- operator
     // Below this line is the other half of the split in publish.ts: everything
     // we record and do not publish. All of it requires the operator credential,
-    // which a box's own token is not — blip may report about blip and cannot
+    // which a box's own token is not — a box may report about itself and cannot
     // read any of this back.
     // The shell only; it carries no data and asks the browser for a
     // credential, then calls the same operator APIs a terminal would. There is
@@ -407,6 +407,7 @@ export default {
       return json({
         hours,
         stride,
+        services: hostServices(env.HOST_SERVICES),
         samples: rows.map((r) => ({ host: r.host, ts: r.ts, ...(parseMeta(r.metrics) ?? {}) })),
       });
     }

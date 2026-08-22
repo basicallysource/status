@@ -85,4 +85,6 @@ export interface Env {
    *  only that it takes a POST and a bearer token. */
   ADMIN_ALERT_URL?: string;
   ADMIN_ALERT_TOKEN?: string;
+  /** Private JSON map of host names to the services they run. */
+  HOST_SERVICES?: string;
 }

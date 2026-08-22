@@ -189,19 +189,19 @@ func TestPartitionDetection(t *testing.T) {
 }
 
 func TestPerServiceMemoryIsReadFromCgroups(t *testing.T) {
-	s := New(Options{Root: fixture, Services: []string{"balloon-bot.service"}}).Collect(at(0))
-	if got := s["svc_balloon_bot_mem_mb"]; got != 1073.7 {
-		t.Errorf("svc_balloon_bot_mem_mb = %v, want 1073.7", got)
+	s := New(Options{Root: fixture, Services: []string{"example.service"}}).Collect(at(0))
+	if got := s["svc_example_mem_mb"]; got != 1073.7 {
+		t.Errorf("svc_example_mem_mb = %v, want 1073.7", got)
 	}
-	if got := s["svc_balloon_bot_mem_peak_mb"]; got != 1610.6 {
+	if got := s["svc_example_mem_peak_mb"]; got != 1610.6 {
 		t.Errorf("peak = %v, want 1610.6", got)
 	}
 	// The counters that say a service is being killed inside its own limit
 	// while the box looks fine.
-	if got := s["svc_balloon_bot_oom_kill"]; got != int64(1) {
+	if got := s["svc_example_oom_kill"]; got != int64(1) {
 		t.Errorf("oom_kill = %v, want 1", got)
 	}
-	if got := s["svc_balloon_bot_oom"]; got != int64(2) {
+	if got := s["svc_example_oom"]; got != int64(2) {
 		t.Errorf("oom = %v, want 2", got)
 	}
 }
@@ -226,9 +226,9 @@ func TestNothingPanicsOnABoxMissingEverything(t *testing.T) {
 
 func TestServiceLabelsAreSafeMetricKeys(t *testing.T) {
 	for unit, want := range map[string]string{
-		"balloon-bot.service": "balloon_bot",
-		"hive-backend":        "hive_backend",
-		"traefik.scope":       "traefik",
+		"example-worker.service": "example_worker",
+		"api-container":          "api_container",
+		"traefik.scope":          "traefik",
 	} {
 		if got := serviceLabel(unit); got != want {
 			t.Errorf("serviceLabel(%q) = %q, want %q", unit, got, want)
@@ -251,12 +251,12 @@ func TestDockerContainersAreFoundByName(t *testing.T) {
 	// Docker names its cgroup scope for the container's full 64-char id, which
 	// nothing else on the box knows, so a name in config has to be resolved
 	// through docker's own state before any memory can be read for it.
-	s := New(Options{Root: fixture, Services: []string{"hive-backend"}}).Collect(at(0))
-	if got := s["svc_hive_backend_mem_mb"]; got != 2147.5 {
-		t.Errorf("svc_hive_backend_mem_mb = %v, want 2147.5", got)
+	s := New(Options{Root: fixture, Services: []string{"api-container"}}).Collect(at(0))
+	if got := s["svc_api_container_mem_mb"]; got != 2147.5 {
+		t.Errorf("svc_api_container_mem_mb = %v, want 2147.5", got)
 	}
-	if got := s["svc_hive_backend_oom"]; got != int64(1) {
-		t.Errorf("svc_hive_backend_oom = %v, want 1", got)
+	if got := s["svc_api_container_oom"]; got != int64(1) {
+		t.Errorf("svc_api_container_oom = %v, want 1", got)
 	}
 }
 
@@ -268,7 +268,7 @@ func TestOnlyRunningContainersAreLookedUp(t *testing.T) {
 	if len(found) != 1 {
 		t.Errorf("found %d containers, want 1 (only the one with a live scope)", len(found))
 	}
-	if _, ok := found["hive-backend"]; !ok {
-		t.Errorf("hive-backend not resolved: %v", found)
+	if _, ok := found["api-container"]; !ok {
+		t.Errorf("api-container not resolved: %v", found)
 	}
 }

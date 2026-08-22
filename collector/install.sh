@@ -3,8 +3,8 @@
 #
 # Run it from a laptop with the binary beside it:
 #   scp status-collector install.sh root@<box>:/tmp/
-#   ssh root@<box> 'HOST=blip MONITOR=balloon UNIT=balloon-bot.service \
-#     SERVICES=balloon-bot.service bash /tmp/install.sh'
+#   ssh root@<box> 'HOST=<host> MONITOR=<monitor> UNIT=<service>.service \
+#     SERVICES=<service>.service bash /tmp/install.sh'
 #
 # BEAT_TOKEN is not passed here. This writes the env file without one and says
 # so: a token typed on a command line ends up in shell history and in the process
@@ -59,7 +59,7 @@ MemoryMax=64M
 CPUQuota=10%
 
 # It reads /proc and /sys, writes one file when it updates itself, and talks to
-# two hosts. It has no business anywhere else.
+# the configured status and release endpoints. It has no business elsewhere.
 NoNewPrivileges=true
 ProtectHome=true
 PrivateTmp=true

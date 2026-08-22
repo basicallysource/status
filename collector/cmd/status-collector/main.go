@@ -7,7 +7,7 @@
 // outage because the thing reporting was accountable to nothing outside itself.
 // A collector that drifts silently is a monitor you cannot trust. This one
 // carries a version, says it on every report, and updates itself from a
-// published release, so "what is running on blip" is a question with an answer.
+// published release, so "what is running on this box" has an answer.
 //
 // The second reason is that rates need memory. /proc/stat counts since boot, so
 // CPU-busy is only meaningful as a delta between two readings, and a script that

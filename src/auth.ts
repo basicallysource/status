@@ -8,11 +8,10 @@ import type { Env } from './types';
  * service goes through a row in `tokens`, scoped to the services that machine is
  * actually allowed to speak for.
  *
- * The scoping is the point. blip runs a bot the public can talk to and hive-prod
- * serves customers; a credential on either that could file a fake outage, or a
- * fake maintenance window, against the other is a bad trade for the convenience
- * of one shared string. Rotating one also stops meaning "break every reporter at
- * once".
+ * The scoping is the point. A credential on one box that could file a fake
+ * outage, or a fake maintenance window, against a service on another is a bad
+ * trade for the convenience of one shared string. Rotating one also stops
+ * meaning "break every reporter at once".
  *
  * There is deliberately no endpoint that mints a token. Keys are inserted with
  * `wrangler d1 execute`, which already requires being able to deploy this

@@ -309,8 +309,8 @@ export const touchTokenStmt = (db: D1Database, name: string, ts: number) =>
 /**
  * A box reporting on itself.
  *
- * Deliberately not a monitor: `hive-prod` the machine is not `hive` the API, and
- * how much swap a box is using is nobody's business but ours. These are recorded
+ * Deliberately not a monitor: a machine is not the service it runs, and how
+ * much swap a box is using is nobody's business but ours. These are recorded
  * and queryable, and never reach the public page.
  */
 export const hostSampleStmt = (

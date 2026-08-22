@@ -43,9 +43,9 @@ Three of those earn their keep in ways the others cannot:
   is indistinguishable from our own code getting slower in every other metric.
 - **PSI** is the share of wall-clock time work was *stalled* waiting for a
   resource. Load average counts runnable tasks, so it cannot tell a busy box
-  from a stuck one. blip sits at load 0.24 with `psi_cpu_some` near 5.
-- **`svc_*_mem_mb`** is what would have caught hive-backend climbing to 2.2 GB
-  days before it started serving 502s.
+  from a stuck one even when the load number looks modest.
+- **`svc_*_mem_mb`** identifies which configured service is consuming memory,
+  instead of leaving a box-level total to implicate everything at once.
 
 Absent means not measured. A stopped service reports nothing rather than zero,
 and a kernel without pressure stalls simply has no `psi_*` keys — a zero would
@@ -56,11 +56,11 @@ be drawn on a chart as a measurement nobody took.
 `/etc/status-collector/collector.env`, mode 600:
 
 ```
-HOST=blip                      # must match the token's host: scope
+HOST=<host>                    # must match the token's host: scope
 BEAT_TOKEN=...                 # scoped credential
-MONITOR=balloon                # optional: also send a service heartbeat
-UNIT=balloon-bot.service       # optional: the unit that heartbeat reports on
-SERVICES=balloon-bot.service   # comma separated; units or container names
+MONITOR=<monitor>              # optional: also send a service heartbeat
+UNIT=<service>.service         # optional: the unit that heartbeat reports on
+SERVICES=<service>.service     # comma separated; units or container names
 DISKS=disk=/                   # comma separated label=path
 ```
 
@@ -106,8 +106,7 @@ with `HOST=` set, and put a credential in `/etc/status-collector/collector.env`.
 ## Limits
 
 `MemoryMax=64M` and `CPUQuota=10%` in the unit, deliberately tight. The monitor
-must never become the thing that needs monitoring, and blip has OOM-killed
-things before.
+must never become the thing that needs monitoring.
 
 Samples are never spooled. A report that fails is logged and dropped — replaying
 an hour of stale samples later would let a box that was dead backfill an hour of

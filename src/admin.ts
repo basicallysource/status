@@ -40,10 +40,23 @@ h1{font-size:18px;font-weight:600;margin:0 0 4px}
 button,select{font:inherit;color:inherit;background:var(--card);border:1px solid var(--line);
   border-radius:7px;padding:6px 11px;cursor:pointer}
 button.on{background:var(--ink);border-color:var(--ink);color:#fff}
+.inventory{display:flex;align-items:baseline;gap:7px;flex-wrap:wrap;margin:9px 0 0;
+  color:var(--muted);font-size:12px}
+.inventory strong{color:var(--fg);font-weight:600}
+.service{padding:2px 7px;border:1px solid var(--line);border-radius:999px;background:var(--card)}
 .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:10px;margin-top:14px}
-.chart{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:12px 14px 8px}
-.chart h3{margin:0;font-size:12.5px;font-weight:600}
-.now{float:right;font-variant-numeric:tabular-nums;color:var(--muted);font-weight:500}
+.chart{position:relative;background:var(--card);border:1px solid var(--line);border-radius:10px;padding:12px 14px 8px}
+.chart h3{display:flex;align-items:center;gap:5px;margin:0;font-size:12.5px;font-weight:600}
+.now{margin-left:auto;font-variant-numeric:tabular-nums;color:var(--muted);font-weight:500}
+.help{display:inline-grid;place-items:center;width:16px;height:16px;padding:0;border:1px solid var(--line);
+  border-radius:50%;background:transparent;color:var(--muted);font:600 10px/1 ui-sans-serif,system-ui;
+  cursor:help}
+.help:hover,.help:focus-visible,.help[aria-expanded="true"]{border-color:var(--ink);color:var(--ink);outline:none}
+.metric-help{display:inline-flex}
+.explain{position:absolute;z-index:2;top:36px;left:12px;right:12px;padding:10px 11px;
+  border:1px solid var(--line);border-radius:8px;background:var(--card);box-shadow:0 5px 18px #0002;
+  color:var(--fg);font-size:11.5px;font-weight:400;line-height:1.45}
+.explain-reading{display:block;margin-top:6px;color:var(--muted)}
 svg{display:block;width:100%;height:auto;margin-top:4px}
 .axis{fill:var(--muted);font-size:8px;font-variant-numeric:tabular-nums}
 .frame{stroke:var(--line);stroke-width:1}
@@ -53,7 +66,7 @@ svg{display:block;width:100%;height:auto;margin-top:4px}
 svg{cursor:crosshair}
 /* Reserved whether or not the mouse is over it, so hovering does not shove
    every other card down the page. */
-.read{margin:2px 0 0;height:16px;font-size:11.5px;color:var(--muted);
+.read{margin:2px 0 0;height:50px;font-size:11.5px;color:var(--muted);
   font-variant-numeric:tabular-nums}
 .empty{margin:14px 0 18px;font-size:12px;color:var(--muted)}
 .note{color:var(--muted);font-size:12px;margin-top:10px}
@@ -81,20 +94,34 @@ const RANGES = [
 // Which metrics to draw, in the order an on-call person would want them. The
 // first three are the ones no other tool here can answer.
 const PANELS = [
-  { key: 'psi_cpu_some',    title: 'CPU pressure',        unit: '%', hint: 'share of time work was stalled waiting for CPU' },
-  { key: 'psi_memory_some', title: 'Memory pressure',     unit: '%' },
-  { key: 'cpu_steal_pct',   title: 'CPU steal',           unit: '%', hint: 'time the hypervisor gave to another tenant' },
-  { key: 'cpu_busy_pct',    title: 'CPU busy',            unit: '%' },
-  { key: 'load1',           title: 'Load (1m)',           unit: '' },
-  { key: 'mem_pct',         title: 'Memory used',         unit: '%' },
-  { key: 'swap_pct',        title: 'Swap used',           unit: '%' },
-  { key: 'disk_pct',        title: 'Disk used',           unit: '%' },
-  { key: 'oom_kills',       title: 'OOM kills (total)',   unit: '' },
-  { key: 'disk_busy_pct',   title: 'Disk busy',           unit: '%' },
-  { key: 'net_rx_mb_s',     title: 'Network in',          unit: 'MB/s' },
-  { key: 'net_tx_mb_s',     title: 'Network out',         unit: 'MB/s' },
-  { key: 'ctxt_per_sec',    title: 'Context switches',    unit: '/s' },
-  { key: 'major_faults',    title: 'Major faults (total)', unit: '' },
+  { key: 'psi_cpu_some', title: 'CPU pressure', unit: '%',
+    help: 'Over the previous minute, the share of time at least one task was ready to run but had to wait for CPU. This measures contention, not CPU usage.' },
+  { key: 'psi_memory_some', title: 'Memory pressure', unit: '%',
+    help: 'Over the previous minute, the share of time at least one task was stalled while the kernel reclaimed memory. Sustained non-zero pressure can mean memory contention or thrashing.' },
+  { key: 'cpu_steal_pct', title: 'CPU steal', unit: '%',
+    help: 'CPU time this virtual machine wanted but the hypervisor used for another machine during the sample interval. A sustained rise can point to host or noisy-neighbour contention.' },
+  { key: 'cpu_busy_pct', title: 'CPU busy', unit: '%',
+    help: 'Share of aggregate CPU time that was not idle during the sample interval. It includes useful work and time waiting on I/O, so pressure and disk activity provide important context.' },
+  { key: 'load1', title: 'Load (1m)', unit: '',
+    help: 'One-minute average number of tasks running, ready to run, or stuck in uninterruptible I/O. Compare it with the box\\'s CPU count: sustained load above that count means work is queueing.' },
+  { key: 'mem_pct', title: 'Memory used', unit: '%',
+    help: 'Share of physical memory the kernel does not consider readily available. Reclaimable cache counts as available, so this is more useful than simply subtracting free memory.' },
+  { key: 'swap_pct', title: 'Swap used', unit: '%',
+    help: 'Share of configured swap space currently occupied. Some use can be harmless; a continuing rise alongside memory pressure usually signals memory strain.' },
+  { key: 'disk_pct', title: 'Disk used', unit: '%',
+    help: 'Share of the monitored filesystem unavailable to ordinary processes. Space reserved for the operating system is treated as unavailable because services cannot use it.' },
+  { key: 'oom_kills', title: 'OOM kills (total)', unit: '',
+    help: 'Number of times since boot that the kernel killed a process because the box ran out of memory. A step upward means a new kill; the total resets when the box reboots.' },
+  { key: 'disk_busy_pct', title: 'Disk busy', unit: '%',
+    help: 'Combined share of the sample interval that physical block devices spent handling I/O, capped at 100%. Sustained values near 100% suggest the disk is saturated.' },
+  { key: 'net_rx_mb_s', title: 'Network in', unit: 'MB/s',
+    help: 'Average megabytes received per second during the sample interval, excluding loopback and container bridge interfaces. One MB is one million bytes.' },
+  { key: 'net_tx_mb_s', title: 'Network out', unit: 'MB/s',
+    help: 'Average megabytes sent per second during the sample interval, excluding loopback and container bridge interfaces. One MB is one million bytes.' },
+  { key: 'ctxt_per_sec', title: 'Context switches', unit: '/s',
+    help: 'System-wide rate at which the kernel switched the CPU from one task to another. The normal level depends on the workload; an unusual spike can reveal scheduling or interrupt churn.' },
+  { key: 'major_faults', title: 'Major faults (total)', unit: '',
+    help: 'Number of page faults since boot that required reading a memory page from storage. They are not application errors; a rising total means programs are waiting on disk for memory pages. The total resets on reboot.' },
 ];
 
 let state = { range: 1, host: null, token: localStorage.getItem(KEY) || '' };
@@ -160,6 +187,7 @@ function draw(hosts, deploys, range) {
   const from = mine.length ? mine[0].ts : 0;
   const to = mine.length ? mine[mine.length - 1].ts : 1;
   const marks = (deploys.deploys || []).filter((d) => d.started >= from && d.started <= to);
+  const services = (hosts.services && hosts.services[state.host]) || [];
 
   app.innerHTML = \`
     <h1>Boxes</h1>
@@ -170,8 +198,14 @@ function draw(hosts, deploys, range) {
       <span style="flex:1"></span>
       \${RANGES.map((x, i) => \`<button data-range="\${i}" class="\${i === state.range ? 'on' : ''}">\${x.label}</button>\`).join('')}
     </div>
+    <p class="inventory"><strong>Runs here:</strong> \${
+      services.length
+        ? services.map((name) => \`<span class="service">\${esc(name)}</span>\`).join('')
+        : '<span>no private service inventory configured for this box</span>'
+    }</p>
     <div class="grid">\${PANELS.map((p, i) => panel(p, mine, marks, from, to, i)).join('')}</div>
-    <p class="note">Times are local. Hover a chart to read the sample under the cursor.
+    <p class="note">Times show UTC, your local time zone, and how long ago they occurred.
+      Hover a chart to read the sample under the cursor.
       Dashed lines are deploys — every service's, not just this box's — and carry the
       version on hover.</p>\`;
 
@@ -191,8 +225,8 @@ function draw(hosts, deploys, range) {
 // so it read as a time range and was not one. Time now has its own labelled
 // axis along the bottom, values are labelled up the left, and moving the mouse
 // over a chart reads out the sample under the cursor.
-const M = { left: 40, right: 10, top: 8, bottom: 18 };
-const W = 320, H = 132;
+const M = { left: 40, right: 10, top: 8, bottom: 45 };
+const W = 320, H = 159;
 const PLOT_W = W - M.left - M.right;
 const PLOT_H = H - M.top - M.bottom;
 
@@ -200,7 +234,17 @@ function panel(p, rows, marks, from, to, index) {
   const points = rows.filter((r) => typeof r[p.key] === 'number').map((r) => [r.ts, r[p.key]]);
   const latest = points.length ? points[points.length - 1][1] : null;
   const unit = p.unit ? ' ' + p.unit : '';
-  const head = \`<h3>\${esc(p.title)}<span class="now">\${
+  const helpId = 'metric-help-' + index;
+  const head = \`<h3>\${esc(p.title)}
+    <span class="metric-help">
+      <button type="button" class="help" data-help aria-label="About \${esc(p.title)}"
+        aria-controls="\${helpId}" aria-describedby="\${helpId}" aria-haspopup="true"
+        aria-expanded="false"><span aria-hidden="true">i</span></button>
+      <span class="explain" id="\${helpId}" role="tooltip" hidden>\${esc(p.help)}
+        <span class="explain-reading">The value at right is the latest sample; the line is its history for the selected range.</span>
+      </span>
+    </span>
+    <span class="now">\${
     latest === null ? '—' : esc(fmt(latest)) + unit}</span></h3>\`;
   if (points.length < 2) {
     return \`<div class="chart">\${head}<p class="empty">not reported by this box</p></div>\`;
@@ -221,7 +265,7 @@ function panel(p, rows, marks, from, to, index) {
   const rules = marks.map((d) => {
     const px = x(d.started).toFixed(1);
     return \`<line class="mark" x1="\${px}" x2="\${px}" y1="\${M.top}" y2="\${M.top + PLOT_H}"><title>\${
-      esc(d.monitor + ' ' + d.version + ' · ' + clock(d.started, to - from))}</title></line>\`;
+      esc(d.monitor + ' ' + d.version + ' · ' + timeStamp(d.started))}</title></line>\`;
   }).join('');
 
   // Value labels: high and low up the left, outside the plot, so they never sit
@@ -234,8 +278,13 @@ function panel(p, rows, marks, from, to, index) {
   const span = to - from;
   const xLabels = [0, 0.5, 1].map((f) => {
     const t = from + span * f;
-    return \`<text class="axis" x="\${x(t).toFixed(1)}" y="\${H - 5}" text-anchor="\${
-      f === 0 ? 'start' : f === 1 ? 'end' : 'middle'}">\${esc(clock(t, span))}</text>\`;
+    const px = x(t).toFixed(1);
+    const anchor = f === 0 ? 'start' : f === 1 ? 'end' : 'middle';
+    return \`<text class="axis" x="\${px}" y="\${H - 28}" text-anchor="\${anchor}">
+      <tspan x="\${px}">\${esc('UTC: ' + shortTime(t, true))}</tspan>
+      <tspan x="\${px}" dy="10">\${esc('Local: ' + shortTime(t, false))}</tspan>
+      <tspan x="\${px}" dy="10">\${esc(relative(t))}</tspan>
+    </text>\`;
   }).join('');
 
   return \`<div class="chart" data-panel="\${index}">\${head}
@@ -285,7 +334,7 @@ function wireHover(series, from, to, span) {
       cursor.querySelector('line').setAttribute('x2', px);
       cursor.querySelector('circle').setAttribute('cx', px);
       cursor.querySelector('circle').setAttribute('cy', py);
-      readout.textContent = fmt(best[1]) + (p.unit ? ' ' + p.unit : '') + '  ·  ' + clock(best[0], 0);
+      readout.textContent = fmt(best[1]) + (p.unit ? ' ' + p.unit : '') + '  ·  ' + timeStamp(best[0]);
     };
     const leave = () => { cursor.style.display = 'none'; readout.innerHTML = '&nbsp;'; };
     svg.addEventListener('mousemove', move);
@@ -294,15 +343,73 @@ function wireHover(series, from, to, span) {
   });
 }
 
-// Local time, because the person reading this is trying to line an event up
-// with their own day. A span of a week or more wants dates, not clock times;
-// a span of zero is the hover readout, which wants both.
-function clock(ts, span) {
+// A metric explanation opens on click or from the keyboard, and only one is
+// kept open. Keeping the explanation in the card means the same control works
+// beside a missing value as it does beside a populated chart.
+function closeHelp(except) {
+  document.querySelectorAll('.help[aria-expanded="true"]').forEach((button) => {
+    if (button === except) return;
+    button.setAttribute('aria-expanded', 'false');
+    document.getElementById(button.getAttribute('aria-controls')).hidden = true;
+  });
+}
+
+app.addEventListener('click', (event) => {
+  const button = event.target.closest('[data-help]');
+  if (!button) return;
+  const opening = button.getAttribute('aria-expanded') !== 'true';
+  closeHelp();
+  button.setAttribute('aria-expanded', String(opening));
+  document.getElementById(button.getAttribute('aria-controls')).hidden = !opening;
+});
+
+document.addEventListener('click', (event) => {
+  if (!event.target.closest('.metric-help')) closeHelp();
+});
+
+document.addEventListener('keydown', (event) => {
+  if (event.key === 'Escape') closeHelp();
+});
+
+function relative(ts) {
+  const delta = Math.round(Date.now() / 1000 - ts);
+  const seconds = Math.abs(delta);
+  if (seconds < 5) return 'just now';
+  const units = [['year', 31536000], ['month', 2592000], ['day', 86400],
+    ['hour', 3600], ['minute', 60], ['second', 1]];
+  const parts = [];
+  let left = seconds;
+  for (const [name, size] of units) {
+    const count = Math.floor(left / size);
+    if (!count && !parts.length) continue;
+    if (count) {
+      parts.push(count + ' ' + name + (count === 1 ? '' : 's'));
+      left -= count * size;
+    }
+    if (parts.length === 2) break;
+  }
+  const said = parts.join(' ') || 'less than a second';
+  return delta >= 0 ? said + ' ago' : 'in ' + said;
+}
+
+function localTime(ts, utc) {
   const d = new Date(ts * 1000);
-  const hhmm = String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0');
-  const date = d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
-  if (span === 0) return date + ' ' + hhmm;
-  return span >= 3 * 86400 ? date : hhmm;
+  const options = { year: 'numeric', month: 'short', day: 'numeric', hour: 'numeric',
+    minute: '2-digit', timeZoneName: 'short' };
+  if (utc) options.timeZone = 'UTC';
+  return d.toLocaleString(undefined, options);
+}
+
+function shortTime(ts, utc) {
+  const d = new Date(ts * 1000);
+  const options = { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit',
+    timeZoneName: 'short' };
+  if (utc) options.timeZone = 'UTC';
+  return d.toLocaleString(undefined, options);
+}
+
+function timeStamp(ts) {
+  return 'UTC: ' + localTime(ts, true) + ' · Your time: ' + localTime(ts, false) + ' · ' + relative(ts);
 }
 
 function fmt(v) {
@@ -312,5 +419,8 @@ function fmt(v) {
 }
 
 load();
+// Keeps both samples and relative timestamps current while the dashboard is
+// left open during an incident.
+setInterval(() => { if (state.token) load(); }, 60000);
 </script>`;
 }

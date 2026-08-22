@@ -3,8 +3,8 @@ name: collector
 # The collector ships on its own tag, separately from the worker. They are
 # deployed by different mechanisms onto different machines — the worker is a
 # `wrangler deploy`, the collector is a binary a box pulls for itself — and
-# tying them to one version would mean every page tweak asked five boxes to
-# restart.
+# tying them to one version would mean every page tweak asked the collector
+# fleet to restart.
 on:
   push:
     branches: [main]

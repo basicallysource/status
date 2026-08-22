@@ -199,9 +199,11 @@ describe('board', () => {
   });
 
   it('dates the held status with a stamp that keeps itself right', () => {
-    // Baked "8h 26m" would be wrong for as long as the status held, and this
-    // card is only redrawn on a change.
-    expect(JSON.stringify(statusCard(samplePage('up'), ['a.png']))).toContain('since <t:940:R>');
+    // UTC is explicit; Discord supplies viewer-local and relative forms that
+    // keep themselves right when this card is not redrawn for a while.
+    const card = JSON.stringify(statusCard(samplePage('up'), ['a.png']));
+    expect(card).toContain('Since UTC: Jan 1, 1970, 12:15 AM UTC');
+    expect(card).toContain('Your time: <t:940:F> · <t:940:R>');
   });
 
   it('says who, what state, and how long, without a clock in it', () => {
@@ -253,11 +255,10 @@ describe('board', () => {
         duringUpdate: true,
       },
     ]);
-    // Discord markup, not a UTC string: the channel has readers in several
-    // zones, and these re-render on their client so they never go stale in a
-    // message that is only edited when something changes.
+    // UTC is readable without client conversion. Discord's two forms render
+    // local and relative time for each reader and keep the latter current.
     expect(lines[0]).toBe(
-      '**Hive API** — Outage for 10m\n-# <t:1760000000:f> · <t:1760000000:R> · Not responding · during an update',
+      '**Hive API** — Outage for 10m\n-# UTC: Oct 9, 2025, 8:53 AM UTC · Your time: <t:1760000000:F> · <t:1760000000:R> · Not responding · during an update',
     );
   });
 

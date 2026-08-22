@@ -24,6 +24,7 @@ database_id = "8e549190-0284-4f28-8c24-391590910a67"
 #   ADMIN_ALERT_TOKEN      its bearer credential
 #   DISCORD_ALERT_WEBHOOK  one message per state change
 #   DISCORD_BOARD_WEBHOOK  one message edited in place: the page, mirrored
+#   HOST_SERVICES          private JSON host-to-service inventory for /admin
 #
 # The whole alert URL is a secret rather than a var, path included: this file is
 # committed, and where an alert lands is not this repo's to publish.

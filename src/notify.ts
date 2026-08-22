@@ -1,4 +1,5 @@
 import { fmtDuration } from './monitor';
+import { discordTime } from './time';
 import type { Env, Monitor, Observation, Status, Transition } from './types';
 
 export const COLOR: Record<Status, number> = {
@@ -75,7 +76,7 @@ export async function sendAlert(
             embeds: [
               {
                 title: `${ICON[t.status]} ${title}`,
-                description: body,
+                description: `${body}\n\n${discordTime(nowSec)}`,
                 color: COLOR[t.status],
                 timestamp: new Date(nowSec * 1000).toISOString(),
               },

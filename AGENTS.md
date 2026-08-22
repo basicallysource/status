@@ -19,6 +19,24 @@ The page is public and the repo should be publishable.
 Internal context — real hostnames, credential locations — is in the gitignored
 `AGENTS.local.md`.
 
+## Fleet details are runtime-private
+
+Never commit hostnames, IP addresses, a count of boxes, or a service-to-host
+mapping. Examples use placeholders. The operator dashboard's "Runs here" note
+comes from the `HOST_SERVICES` Worker secret, as JSON shaped like
+`{"<host>":["<service>"]}`. The authenticated API may return it; the public page
+must not. Real inventory belongs in runtime secrets or `AGENTS.local.md`.
+
+## A timestamp needs all three clocks
+
+Every human-facing instant — public page, operator view, Discord board, or
+alert — says the UTC date and time, the viewer's local date and time, and a
+plain relative age such as "3 hours 12 minutes ago." On web pages, render UTC
+as the no-script baseline and hydrate local and relative text in the browser.
+In Discord, write UTC explicitly and use both the local (`F`) and relative (`R`)
+timestamp forms. A duration or calendar-day bucket is not an instant; label it
+clearly, but do not invent UTC/local versions of it.
+
 ## What we record and what we publish are different sets
 
 `src/publish.ts` is the boundary, and it is a closed vocabulary: the page says
@@ -63,8 +81,8 @@ fine", and the gap is the honest record.
 ## Deploying
 
 Two tags, deliberately separate, because they reach different machines by
-different means and one shared version would make every page tweak restart five
-boxes.
+different means and one shared version would make every page tweak restart the
+collector fleet.
 
 - `v*` — the worker. Checks, deploys, then curls the live domain.
 - `collector-v*` — the box agent. Builds a static binary and publishes it with a

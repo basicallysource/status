@@ -3,6 +3,7 @@ import { kvGet, kvSetStmt } from './db';
 import { fmtDuration } from './monitor';
 import { COLOR } from './notify';
 import { PUBLIC_NOTE } from './publish';
+import { discordTime } from './time';
 import type { DayCell, PageData, PageIncident, PageMonitor } from './page';
 import { Canvas, type RGBA } from './png';
 import type { Env, Status } from './types';
@@ -112,10 +113,10 @@ const separator = (spacing: 1 | 2 = 1) => ({ type: SEPARATOR, divider: true, spa
  * line, and the range is stated once in the footer instead of four times.
  */
 export function serviceLines(m: PageMonitor): string {
-  // "since 8 hours ago" rather than the page's "8h 26m", because that number
-  // is computed once and this message may not be touched again for days.
-  const held = m.since ? ` since ${ago(m.since)}` : '';
-  const head = `**${m.name}** · ${LABEL[m.status]}${held} · ${m.uptime.toFixed(2)}%`;
+  // Discord's local and relative stamps keep themselves current even when this
+  // card is not redrawn; UTC is written explicitly beside them.
+  const held = m.since ? `Since ${discordTime(m.since)}` : '';
+  const head = `**${m.name}** · ${LABEL[m.status]} · ${m.uptime.toFixed(2)}%`;
   // The status NOTE, not the page's `detail`. That one carries the live
   // response time, which changes on every check — putting it here made the
   // card differ every minute and edit itself every minute, which is the exact
@@ -124,7 +125,7 @@ export function serviceLines(m: PageMonitor): string {
   // precise number that stopped being true almost immediately. It stays on the
   // page, where it is live.
   const note = m.status === 'up' ? '' : PUBLIC_NOTE[m.status];
-  const sub = [m.description, note].filter(Boolean).join(' · ');
+  const sub = [held, m.description, note].filter(Boolean).join(' · ');
   return sub ? `${head}\n-# ${sub}` : head;
 }
 
@@ -165,8 +166,8 @@ export function statusCard(page: PageData, files: string[]) {
 }
 
 /**
- * Discord's own timestamp markup. `f` is the reader's local date and time in
- * their locale, `R` is "8 hours ago".
+ * Discord's own timestamp markup renders local and relative time on the
+ * reader's client. UTC is still written explicitly by discordTime.
  *
  * Two reasons this beats the UTC string the page prints. The page has one
  * reader at a time looking at a clock; a channel has everyone, in their own
@@ -177,9 +178,6 @@ export function statusCard(page: PageData, files: string[]) {
  * status held. A relative stamp is the one kind of clock that stays right in a
  * message nobody is editing.
  */
-const at = (ts: number) => `<t:${Math.floor(ts)}:f>`;
-const ago = (ts: number) => `<t:${Math.floor(ts)}:R>`;
-
 /**
  * The message ABOVE the card: what has actually gone wrong lately.
  *
@@ -196,7 +194,7 @@ export function incidentLines(incidents: PageIncident[], limit = 6): string[] {
     // A span, so it stays a duration — Discord has markup for instants only.
     const lasted = i.ended ? `for ${fmtDuration(i.ended - i.started)}` : '— ongoing';
     const during = i.duringUpdate ? ' · during an update' : '';
-    return `**${i.name}** — ${LABEL[i.status]} ${lasted}\n-# ${at(i.started)} · ${ago(i.started)}${i.detail ? ` · ${i.detail}` : ''}${during}`;
+    return `**${i.name}** — ${LABEL[i.status]} ${lasted}\n-# ${discordTime(i.started)}${i.detail ? ` · ${i.detail}` : ''}${during}`;
   });
 }
 

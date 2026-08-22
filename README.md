@@ -55,13 +55,14 @@ A machine can report on itself, separately from any service it runs:
 
 ```bash
 curl -XPOST -H "Authorization: Bearer $TOKEN" \
-  "https://status.basically.website/host/blip?load1=0.4&cpus=1&mem_pct=25.3&swap_pct=0&uptime_s=3010111"
+  "https://status.basically.website/host/<host>?load1=0.4&cpus=1&mem_pct=25.3&swap_pct=0&uptime_s=3010111"
 ```
 
-This is recorded and never rendered. A box is not a service — whether the API
-answers is a customer's question, and how hard the machine is working to answer
-it is ours. Read it back with `GET /api/hosts?hours=6[&host=blip]`, which needs
-the operator credential and answers at most `HOST_QUERY_MAX_HOURS` at a time.
+This is recorded and never rendered publicly. A box is not a service — whether
+the API answers is a customer's question, and how hard the machine is working
+to answer it is ours. Read it back with
+`GET /api/hosts?hours=6[&host=<host>]`, which needs the operator credential and
+answers at most `HOST_QUERY_MAX_HOURS` at a time.
 
 `/admin` draws it: one chart per metric, per box, with every deploy marked on
 every chart — "CPU has been climbing since June" is only useful next to what
@@ -69,6 +70,11 @@ shipped in June. The page carries no data and asks the browser for the same
 operator credential a terminal would use, so there is no second authentication
 path and no server-side session. Putting Cloudflare Access in front of `/admin`
 would need no change here; the token prompt would simply stop being reached.
+
+The selected box can also carry a private "Runs here" reminder. Its inventory
+is the `HOST_SERVICES` Worker secret, a JSON map shaped like
+`{"<host>":["<service>"]}`. Hostnames, addresses, fleet size, and the actual
+service-to-host mapping do not belong in this repository.
 
 Ranges pair a window with a stride, and the server thins rather than averages: a
 month is 43,000 samples per box, and reducing that inside a Worker's 10 ms CPU
@@ -141,7 +147,7 @@ which already requires being able to deploy this worker:
 
 ```sql
 INSERT INTO tokens (name, hash, monitors, created)
-VALUES ('blip', '<sha256 of the token>', '["balloon","host:blip"]', <epoch>);
+VALUES ('<reporter>', '<sha256 of the token>', '["<monitor>","host:<host>"]', <epoch>);
 ```
 
 ## Routes
@@ -200,3 +206,4 @@ secret is missing:
 | `ADMIN_ALERT_URL`, `ADMIN_ALERT_TOKEN` | a private endpoint an alert is POSTed to, and its bearer credential |
 | `DISCORD_ALERT_WEBHOOK` | a message per state change |
 | `DISCORD_BOARD_WEBHOOK` | one message, edited in place, mirroring the page |
+| `HOST_SERVICES` | private JSON host-to-service inventory for `/admin` |
