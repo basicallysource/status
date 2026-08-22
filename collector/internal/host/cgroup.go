@@ -58,7 +58,7 @@ func (c *Collector) readServices(s Sample) {
 // if it is not running. A stopped service has no cgroup at all, which is why an
 // absent key here means "not running" rather than "zero bytes".
 func (c *Collector) serviceDir(unit string) string {
-  // A systemd service: example.service.
+	// A systemd service: example.service.
 	candidate := filepath.Join(cgroupRoot, "system.slice", unit)
 	if fi, err := os.Stat(c.path(candidate)); err == nil && fi.IsDir() {
 		return candidate
