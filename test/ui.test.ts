@@ -55,13 +55,18 @@ describe('human-facing time', () => {
 });
 
 describe('admin dashboard', () => {
-  it('explains every metric, including major faults', () => {
+  it('explains what every metric means and operationally implies', () => {
     const html = renderAdmin();
     const panels = html.slice(html.indexOf('const PANELS'), html.indexOf('let state'));
-    expect((panels.match(/help:/g) ?? [])).toHaveLength(14);
-    expect(panels).toContain('They are not application errors');
+    expect((panels.match(/meaning:/g) ?? [])).toHaveLength(14);
+    expect((panels.match(/implication:/g) ?? [])).toHaveLength(14);
+    expect(panels).toContain('Disk-backed page faults (total)');
+    expect(panels).toContain('This is not an application error or crash');
+    expect(panels).toContain('The absolute total is not a health score');
     expect(html).toContain('data-help aria-label="About');
     expect(html).toContain('role="tooltip"');
+    expect(html).toContain('What it means:');
+    expect(html).toContain('What it implies:');
   });
 
   it('keeps the generated browser program syntactically valid', () => {

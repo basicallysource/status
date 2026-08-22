@@ -37,6 +37,15 @@ In Discord, write UTC explicitly and use both the local (`F`) and relative (`R`)
 timestamp forms. A duration or calendar-day bucket is not an instant; label it
 clearly, but do not invent UTC/local versions of it.
 
+## Metric help must answer the operational question
+
+An info popover is not a glossary. For every chart or number, say in plain
+language what was measured and what its shape means: flat, rising, or a new
+step. State whether the value is an interval, a rate, or a cumulative total and
+when it resets. Name the nearby signals that distinguish a harmless value from
+a capacity problem, and the user-visible failure that can follow. Do not invent
+a universal threshold for a workload-specific metric.
+
 ## What we record and what we publish are different sets
 
 `src/publish.ts` is the boundary, and it is a closed vocabulary: the page says

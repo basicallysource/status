@@ -56,6 +56,9 @@ button.on{background:var(--ink);border-color:var(--ink);color:#fff}
 .explain{position:absolute;z-index:2;top:36px;left:12px;right:12px;padding:10px 11px;
   border:1px solid var(--line);border-radius:8px;background:var(--card);box-shadow:0 5px 18px #0002;
   color:var(--fg);font-size:11.5px;font-weight:400;line-height:1.45}
+.explain-row{display:block}
+.explain-row+.explain-row{margin-top:7px}
+.explain strong{font-weight:650}
 .explain-reading{display:block;margin-top:6px;color:var(--muted)}
 svg{display:block;width:100%;height:auto;margin-top:4px}
 .axis{fill:var(--muted);font-size:8px;font-variant-numeric:tabular-nums}
@@ -95,33 +98,47 @@ const RANGES = [
 // first three are the ones no other tool here can answer.
 const PANELS = [
   { key: 'psi_cpu_some', title: 'CPU pressure', unit: '%',
-    help: 'Over the previous minute, the share of time at least one task was ready to run but had to wait for CPU. This measures contention, not CPU usage.' },
+    meaning: 'Over the previous minute, the share of time at least one task was ready to run but had to wait for CPU. This measures contention, not CPU usage.',
+    implication: 'A sustained rise means work is queueing and requests can slow down. High CPU busy points to our workload exhausting the CPUs; high CPU taken by host points to the VM host withholding CPU.' },
   { key: 'psi_memory_some', title: 'Memory pressure', unit: '%',
-    help: 'Over the previous minute, the share of time at least one task was stalled while the kernel reclaimed memory. Sustained non-zero pressure can mean memory contention or thrashing.' },
-  { key: 'cpu_steal_pct', title: 'CPU steal', unit: '%',
-    help: 'CPU time this virtual machine wanted but the hypervisor used for another machine during the sample interval. A sustained rise can point to host or noisy-neighbour contention.' },
+    meaning: 'Over the previous minute, the share of time at least one task was stalled while Linux tried to reclaim memory.',
+    implication: 'Sustained pressure means programs are pausing for RAM. If swap use and disk-backed page faults rise too, the box is actively paging and requests can become slow; a new out-of-memory kill means a process was terminated.' },
+  { key: 'cpu_steal_pct', title: 'CPU taken by host', unit: '%',
+    meaning: 'CPU time this virtual machine wanted but the hypervisor gave to another machine during the sample interval.',
+    implication: 'Brief spikes are usually harmless. A sustained level alongside CPU pressure or slower requests points to host or noisy-neighbour contention rather than our own code using the CPU.' },
   { key: 'cpu_busy_pct', title: 'CPU busy', unit: '%',
-    help: 'Share of aggregate CPU time that was not idle during the sample interval. It includes useful work and time waiting on I/O, so pressure and disk activity provide important context.' },
-  { key: 'load1', title: 'Load (1m)', unit: '',
-    help: 'One-minute average number of tasks running, ready to run, or stuck in uninterruptible I/O. Compare it with the box\\'s CPU count: sustained load above that count means work is queueing.' },
+    meaning: 'Share of all CPU time that was not idle during the sample interval. It includes useful work and time spent waiting on I/O.',
+    implication: 'High usage can be healthy when work is completing. It becomes a capacity problem when it stays near the ceiling and CPU pressure or the work queue rises; high disk busy instead suggests the CPUs are waiting on storage.' },
+  { key: 'load1', title: 'Work queue / load (1m)', unit: '',
+    meaning: 'One-minute average number of tasks running, ready to run, or stuck waiting on uninterruptible I/O.',
+    implication: 'Roughly one runnable task per CPU core can keep the box fully occupied; sustained load above the core count means work is queueing. CPU pressure identifies compute contention, while memory pressure or disk busy points to waiting elsewhere.' },
   { key: 'mem_pct', title: 'Memory used', unit: '%',
-    help: 'Share of physical memory the kernel does not consider readily available. Reclaimable cache counts as available, so this is more useful than simply subtracting free memory.' },
+    meaning: 'Share of physical memory Linux does not consider readily available. Reclaimable cache counts as available.',
+    implication: 'A high value alone is not a failure because Linux uses spare RAM for cache. It matters when it stays high and memory pressure, swap, or disk-backed page faults rise; a new out-of-memory kill means the shortage already terminated a process.' },
   { key: 'swap_pct', title: 'Swap used', unit: '%',
-    help: 'Share of configured swap space currently occupied. Some use can be harmless; a continuing rise alongside memory pressure usually signals memory strain.' },
+    meaning: 'Share of configured swap space currently occupied. It says how much is stored there, not whether pages are moving right now.',
+    implication: 'A stable non-zero amount can be harmless. A continuing rise with memory pressure and disk-backed page faults means active paging, which can make requests slow; reaching the limit removes a buffer against out-of-memory kills.' },
   { key: 'disk_pct', title: 'Disk used', unit: '%',
-    help: 'Share of the monitored filesystem unavailable to ordinary processes. Space reserved for the operating system is treated as unavailable because services cannot use it.' },
-  { key: 'oom_kills', title: 'OOM kills (total)', unit: '',
-    help: 'Number of times since boot that the kernel killed a process because the box ran out of memory. A step upward means a new kill; the total resets when the box reboots.' },
+    meaning: 'Share of the monitored filesystem unavailable to ordinary processes. Space reserved for the operating system is counted as unavailable because services cannot use it.',
+    implication: 'A rising line is consuming the remaining write headroom. Near-full disks can break database writes, logs, uploads, and deploys, so find the growing data or expand storage before it fills.' },
+  { key: 'oom_kills', title: 'Out-of-memory kills (total)', unit: '',
+    meaning: 'Cumulative number since boot of times Linux killed a process because the box ran out of memory.',
+    implication: 'Any step upward is a real process failure and should be matched to a restart or service log. A flat line only records old kills, and reboot resets the total to zero.' },
   { key: 'disk_busy_pct', title: 'Disk busy', unit: '%',
-    help: 'Combined share of the sample interval that physical block devices spent handling I/O, capped at 100%. Sustained values near 100% suggest the disk is saturated.' },
+    meaning: 'Combined share of the sample interval that physical block devices spent handling reads or writes, capped at 100%.',
+    implication: 'Brief spikes are normal. A sustained value near 100% means I/O is probably queueing; if load, memory pressure, or request latency rises at the same time, storage is the likely bottleneck.' },
   { key: 'net_rx_mb_s', title: 'Network in', unit: 'MB/s',
-    help: 'Average megabytes received per second during the sample interval, excluding loopback and container bridge interfaces. One MB is one million bytes.' },
+    meaning: 'Average megabytes received per second during the sample interval, excluding loopback and container bridge interfaces. One MB is one million bytes.',
+    implication: 'Spikes can simply mean more traffic or a deploy. The number has no universal bad threshold; investigate an unexpected sustained change, especially when response time worsens or it does not match expected traffic.' },
   { key: 'net_tx_mb_s', title: 'Network out', unit: 'MB/s',
-    help: 'Average megabytes sent per second during the sample interval, excluding loopback and container bridge interfaces. One MB is one million bytes.' },
+    meaning: 'Average megabytes sent per second during the sample interval, excluding loopback and container bridge interfaces. One MB is one million bytes.',
+    implication: 'Spikes can simply mean more downloads, replication, or a deploy. The number has no universal bad threshold; investigate an unexpected sustained change, especially when response time worsens.' },
   { key: 'ctxt_per_sec', title: 'Context switches', unit: '/s',
-    help: 'System-wide rate at which the kernel switched the CPU from one task to another. The normal level depends on the workload; an unusual spike can reveal scheduling or interrupt churn.' },
-  { key: 'major_faults', title: 'Major faults (total)', unit: '',
-    help: 'Number of page faults since boot that required reading a memory page from storage. They are not application errors; a rising total means programs are waiting on disk for memory pages. The total resets on reboot.' },
+    meaning: 'System-wide rate at which Linux switched a CPU from one task to another.',
+    implication: 'The absolute level is workload-specific and is not a fault count. A sharp change with rising CPU pressure and worse throughput can reveal excessive thread or process churn; by itself it is only activity.' },
+  { key: 'major_faults', title: 'Disk-backed page faults (total)', unit: '',
+    meaning: 'Cumulative count since boot of memory pages Linux had to fetch from storage because they were not in RAM. This is not an application error or crash.',
+    implication: 'A flat line means no new faults and an occasional step is normal. A steep continuing rise with memory pressure, increasing swap, or a busy disk means active paging and likely request latency. The absolute total is not a health score and resets on reboot.' },
 ];
 
 let state = { range: 1, host: null, token: localStorage.getItem(KEY) || '' };
@@ -240,7 +257,9 @@ function panel(p, rows, marks, from, to, index) {
       <button type="button" class="help" data-help aria-label="About \${esc(p.title)}"
         aria-controls="\${helpId}" aria-describedby="\${helpId}" aria-haspopup="true"
         aria-expanded="false"><span aria-hidden="true">i</span></button>
-      <span class="explain" id="\${helpId}" role="tooltip" hidden>\${esc(p.help)}
+      <span class="explain" id="\${helpId}" role="tooltip" hidden>
+        <span class="explain-row"><strong>What it means:</strong> \${esc(p.meaning)}</span>
+        <span class="explain-row"><strong>What it implies:</strong> \${esc(p.implication)}</span>
         <span class="explain-reading">The value at right is the latest sample; the line is its history for the selected range.</span>
       </span>
     </span>
