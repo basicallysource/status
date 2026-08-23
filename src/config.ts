@@ -46,6 +46,29 @@ export const MONITORS: Monitor[] = [
     description: 'Discord bot.',
   },
   {
+    id: 'balloon-box',
+    name: 'balloon box',
+    group: 'balloon',
+    kind: 'http',
+    // The heartbeat above cannot see the failure this catches, and on
+    // 2026-08-23 it did not: blip spent an hour so starved of memory that
+    // tailscaled, sshd and nginx all stopped answering, while a one-line cron
+    // curl still got out every minute. The page said "balloon: up, Healthy" for
+    // the whole outage, because a beat proves the box can still TALK and this
+    // proves it can still ANSWER. Liveness reported by the subject is not the
+    // same fact as liveness observed from outside, and only one of them is what
+    // somebody asking "is the bot up" means.
+    //
+    // /healthz is two words and no data, public on purpose, and already there
+    // for the release agent. Probing it costs the box nothing.
+    url: 'https://balloon.basically.website/healthz',
+    expectBody: 'ok',
+    // Short, because the failure mode is hanging rather than refusing: a
+    // starved origin accepts the connection and then never writes.
+    timeoutMs: 8000,
+    description: 'The machine the bot runs on.',
+  },
+  {
     id: 'assets',
     name: 'Asset service',
     group: 'basically',

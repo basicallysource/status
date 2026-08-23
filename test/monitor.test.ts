@@ -6,7 +6,7 @@ import type { DayCell, PageData } from '../src/page';
 import { deployEvents, excused, isOpen, isSlow, typicalSeconds, type DeployRow } from '../src/deploy';
 import { allowed } from '../src/auth';
 import { alertText, worthAlerting } from '../src/notify';
-import { DEPLOY_MAX_OPEN_SEC, MAINTENANCE_MAX_SEC } from '../src/config';
+import { DEPLOY_MAX_OPEN_SEC, MAINTENANCE_MAX_SEC, MONITORS } from '../src/config';
 import { PUBLIC_NOTE, publicDetail } from '../src/publish';
 import type {
   HeartbeatMonitor,
@@ -562,5 +562,28 @@ describe('what is worth waking someone for', () => {
   it('measures a recovery against the outage, not against the recovery', () => {
     const back = t({ status: 'up', prevStatus: 'down', since: 2000, prevSince: 1400 });
     expect(alertText(mon, back, good, 2000).body).toContain('10m');
+  });
+});
+
+describe('a host that can talk is not a host that can answer', () => {
+  // 2026-08-23: blip spent an hour too starved to answer tailscale, ssh or
+  // nginx, while its cron heartbeat got out every minute. The page said
+  // "balloon: up, Healthy" for the whole outage. A beat is reported BY the
+  // subject and an http probe is observed FROM outside, and the balloon group
+  // needs both: the beat catches a stopped bot on a healthy box, the probe
+  // catches a box nobody can reach. Deleting either one restores a blind spot
+  // that already cost an hour of public downtime.
+  const balloon = MONITORS.filter((m) => m.group === 'balloon');
+
+  it('watches balloon from both directions', () => {
+    expect(balloon.some((m) => m.kind === 'heartbeat')).toBe(true);
+    expect(balloon.some((m) => m.kind === 'http')).toBe(true);
+  });
+
+  it('probes something that costs the box nothing and asserts on the body', () => {
+    const probe = balloon.find((m) => m.kind === 'http');
+    expect(probe?.kind === 'http' && probe.url).toContain('/healthz');
+    // A 200 from an error page is not health; the body has to say so.
+    expect(probe?.kind === 'http' && probe.expectBody).toBeTruthy();
   });
 });
