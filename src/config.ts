@@ -104,7 +104,27 @@ export const MONITORS: Monitor[] = [
     group: 'basically',
     kind: 'http',
     url: 'https://basically.website/',
+    // A 200 does not prove the page is ours: whatever sits in front of the site
+    // can answer with one. The product's name rather than a line of copy,
+    // because copy gets rewritten and the name does not.
+    expectBody: 'basically Sorter',
     timeoutMs: 10000,
+  },
+  {
+    id: 'website-backend',
+    name: 'Website services',
+    group: 'basically',
+    kind: 'http',
+    // Watched apart from the page above, because the page does not fail when
+    // this does: it still renders, and what breaks is signing up and the
+    // numbers on it. /healthz answers only after reading the service's own
+    // database, and its body is the running version, so the check asserts on
+    // the part of it that survives a release.
+    url: 'https://backend.basically.website/healthz',
+    expectBody: 'backend-v',
+    // Short, because an overloaded origin hangs rather than refusing.
+    timeoutMs: 8000,
+    description: 'Email sign-up and fleet stats on our website.',
   },
 ];
 
