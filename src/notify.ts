@@ -65,7 +65,7 @@ export async function sendAlert(
   nowSec: number,
 ): Promise<void> {
   if (!worthAlerting(t)) return;
-  const { title, body } = alertText(m, t, obs, nowSec);
+  const { title, body } = alertText(m, t, obs, t.since);
   const jobs: Promise<void>[] = [];
 
   if (env.DISCORD_ALERT_WEBHOOK) {

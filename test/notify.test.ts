@@ -78,11 +78,13 @@ describe('operator alerts', () => {
     vi.stubGlobal('fetch', fetch_mock);
     const transition: Transition = { ...TRANSITION, status: 'up', prevStatus: 'down', since: 2600 };
     await sendAlert(ENV, MONITOR, transition, OBSERVATION, 2600);
+    await sendAlert(ENV, MONITOR, transition, OBSERVATION, 2660);
     expect(JSON.parse(fetch_mock.mock.calls[0][1].body)).toMatchObject({
       title: 'Example recovered',
       request_id: 'example:up:2600',
       urgency: 'normal',
     });
+    expect(fetch_mock.mock.calls[1][1].body).toBe(fetch_mock.mock.calls[0][1].body);
   });
 
   it('suppresses routine maintenance but alerts when it overruns', async () => {
