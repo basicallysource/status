@@ -207,3 +207,11 @@ secret is missing:
 | `DISCORD_ALERT_WEBHOOK` | a message per state change |
 | `DISCORD_BOARD_WEBHOOK` | one message, edited in place, mirroring the page |
 | `HOST_SERVICES` | private JSON host-to-service inventory for `/admin` |
+
+The operator alert endpoint accepts a JSON POST containing `title`, `message`,
+`request_id`, and `urgency`. Its bearer credential should permit sending alerts
+only. `request_id` identifies one monitor's state transition, so a receiver can
+deduplicate delivery attempts. Outages and degraded states request
+`time_sensitive` urgency; recovery requests `normal`. Routine maintenance and
+unchanged polls send nothing. Delivery times out after ten seconds and failures
+do not stop monitoring.

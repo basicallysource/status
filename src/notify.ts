@@ -2,6 +2,8 @@ import { fmtDuration } from './monitor';
 import { discordTime } from './time';
 import type { Env, Monitor, Observation, Status, Transition } from './types';
 
+const ALERT_TIMEOUT_MS = 10000;
+
 export const COLOR: Record<Status, number> = {
   up: 0x3ba55d,
   degraded: 0xe6a817,
@@ -44,10 +46,10 @@ export function alertText(m: Monitor, t: Transition, obs: Observation, nowSec: n
  * The overrun is still alerted, loudly — see alertText.
  */
 export const worthAlerting = (t: Transition): boolean =>
-  t.status !== 'maintenance' && !(t.prevStatus === 'maintenance' && t.status === 'up');
+  t.changed && t.status !== 'maintenance' && !(t.prevStatus === 'maintenance' && t.status === 'up');
 
 async function post(url: string, init: RequestInit, label: string): Promise<void> {
-  const res = await fetch(url, init);
+  const res = await fetch(url, { ...init, signal: AbortSignal.timeout(ALERT_TIMEOUT_MS) });
   if (!res.ok) throw new Error(`${label} ${res.status}: ${(await res.text()).slice(0, 200)}`);
 }
 
@@ -62,6 +64,7 @@ export async function sendAlert(
   obs: Observation,
   nowSec: number,
 ): Promise<void> {
+  if (!worthAlerting(t)) return;
   const { title, body } = alertText(m, t, obs, nowSec);
   const jobs: Promise<void>[] = [];
 
@@ -98,7 +101,12 @@ export async function sendAlert(
             'content-type': 'application/json',
             authorization: `Bearer ${env.ADMIN_ALERT_TOKEN}`,
           },
-          body: JSON.stringify({ title, message: body }),
+          body: JSON.stringify({
+            title,
+            message: body,
+            request_id: `${m.id}:${t.status}:${t.since}`,
+            urgency: t.status === 'down' || t.status === 'degraded' ? 'time_sensitive' : 'normal',
+          }),
         },
         'admin alert',
       ),
