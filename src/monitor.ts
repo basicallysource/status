@@ -11,7 +11,25 @@ import type {
 
 const UA = 'basically-status/1 (+https://status.basically.website)';
 
-export async function probeHttp(m: HttpMonitor, f: typeof fetch = fetch): Promise<Observation> {
+/**
+ * An answer that never arrived is not the same as an answer that said no. A
+ * timeout or a dropped connection says the path between us and the service
+ * failed once, which a fresh request often clears; a 502 or a wrong body is the
+ * service speaking, and asking again would only argue with it. So only the
+ * first kind gets a second try, and a service that is really down fails both.
+ */
+export async function probeHttp(
+  m: HttpMonitor,
+  f: typeof fetch = fetch,
+  retryDelayMs = 1000,
+): Promise<Observation> {
+  const first = await probeOnce(m, f);
+  if (first.ok || first.code !== null) return first;
+  await new Promise((r) => setTimeout(r, retryDelayMs));
+  return probeOnce(m, f);
+}
+
+async function probeOnce(m: HttpMonitor, f: typeof fetch): Promise<Observation> {
   const timeoutMs = m.timeoutMs ?? 10000;
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), timeoutMs);

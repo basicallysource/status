@@ -185,9 +185,43 @@ describe('probeHttp', () => {
       new Promise((_res, rej) => {
         init.signal?.addEventListener('abort', () => rej(Object.assign(new Error('aborted'), { name: 'AbortError' })));
       })) as unknown as typeof fetch;
-    const o = await probeHttp(m, f);
+    const o = await probeHttp(m, f, 0);
     expect(o.ok).toBe(false);
     expect(o.err).toContain('timed out');
+  });
+
+  it('asks again when no answer came back, and believes the second one', async () => {
+    let calls = 0;
+    const f = (async () => {
+      calls += 1;
+      if (calls === 1) throw Object.assign(new Error('aborted'), { name: 'AbortError' });
+      return new Response('ok', { status: 200 });
+    }) as unknown as typeof fetch;
+    const o = await probeHttp(m, f, 0);
+    expect(o.ok).toBe(true);
+    expect(calls).toBe(2);
+  });
+
+  it('does not argue with a service that answered', async () => {
+    let calls = 0;
+    const f = (async () => {
+      calls += 1;
+      return new Response('bad gateway', { status: 502 });
+    }) as unknown as typeof fetch;
+    const o = await probeHttp(m, f, 0);
+    expect(o.ok).toBe(false);
+    expect(calls).toBe(1);
+  });
+
+  it('is down when both tries get no answer', async () => {
+    let calls = 0;
+    const f = (async () => {
+      calls += 1;
+      throw new Error('connection reset');
+    }) as unknown as typeof fetch;
+    const o = await probeHttp(m, f, 0);
+    expect(o.ok).toBe(false);
+    expect(calls).toBe(2);
   });
 });
 
