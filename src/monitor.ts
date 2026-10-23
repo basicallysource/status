@@ -44,14 +44,14 @@ async function probeOnce(m: HttpMonitor, f: typeof fetch): Promise<Observation> 
     });
     const latencyMs = Date.now() - started;
     if (res.status < 200 || res.status >= 400) {
-      await res.body?.cancel();
+      if (!res.bodyUsed) await res.body?.cancel();
       return { ok: false, latencyMs, code: res.status, err: `HTTP ${res.status}` };
     }
     if (m.expectBody && !(await res.text()).includes(m.expectBody)) {
       return { ok: false, latencyMs, code: res.status, err: `body missing ${m.expectBody}` };
     }
     // A response nobody reads keeps its connection, and a Worker has only six.
-    await res.body?.cancel();
+    if (!res.bodyUsed) await res.body?.cancel();
     return { ok: true, latencyMs, code: res.status, err: null };
   } catch (e) {
     const aborted = e instanceof Error && (e.name === 'AbortError' || e.name === 'TimeoutError');
