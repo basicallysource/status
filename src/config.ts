@@ -135,6 +135,9 @@ export const MONITOR_BY_ID: Record<string, Monitor> = Object.fromEntries(
 /** Consecutive failures before we call it down. One is too jumpy to trust. */
 export const FAILURES_BEFORE_DOWN = 2;
 
+// Under the six outgoing connections a Worker may hold open; see mapLimit.
+export const MAX_CONCURRENT_PROBES = 4;
+
 /**
  * The longest a declared deploy may keep a service off the outage list.
  *

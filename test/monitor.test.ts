@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { checkThresholds, fmtDuration, nextState, probeHeartbeat, probeHttp } from '../src/monitor';
+import { checkThresholds, fmtDuration, mapLimit, nextState, probeHeartbeat, probeHttp } from '../src/monitor';
 import { boardFingerprint, incidentLines, overall, statusCard } from '../src/board';
 import type { DayCell, PageData } from '../src/page';
 
@@ -190,6 +190,15 @@ describe('probeHttp', () => {
     expect(o.err).toContain('timed out');
   });
 
+  it('lets go of a response it does not read', async () => {
+    let cancelled = false;
+    const body = new ReadableStream({ cancel: () => void (cancelled = true) });
+    const f = (async () => new Response(body, { status: 200 })) as unknown as typeof fetch;
+    const o = await probeHttp(m, f, 0);
+    expect(o.ok).toBe(true);
+    expect(cancelled).toBe(true);
+  });
+
   it('asks again when no answer came back, and believes the second one', async () => {
     let calls = 0;
     const f = (async () => {
@@ -222,6 +231,22 @@ describe('probeHttp', () => {
     const o = await probeHttp(m, f, 0);
     expect(o.ok).toBe(false);
     expect(calls).toBe(2);
+  });
+});
+
+describe('mapLimit', () => {
+  it('never runs more than the limit at once, and keeps the order', async () => {
+    let running = 0;
+    let peak = 0;
+    const out = await mapLimit([1, 2, 3, 4, 5, 6, 7], 3, async (n) => {
+      running += 1;
+      peak = Math.max(peak, running);
+      await new Promise((r) => setTimeout(r, 5));
+      running -= 1;
+      return n * 2;
+    });
+    expect(out).toEqual([2, 4, 6, 8, 10, 12, 14]);
+    expect(peak).toBe(3);
   });
 });
 

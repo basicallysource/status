@@ -44,11 +44,14 @@ async function probeOnce(m: HttpMonitor, f: typeof fetch): Promise<Observation> 
     });
     const latencyMs = Date.now() - started;
     if (res.status < 200 || res.status >= 400) {
+      await res.body?.cancel();
       return { ok: false, latencyMs, code: res.status, err: `HTTP ${res.status}` };
     }
     if (m.expectBody && !(await res.text()).includes(m.expectBody)) {
       return { ok: false, latencyMs, code: res.status, err: `body missing ${m.expectBody}` };
     }
+    // A response nobody reads keeps its connection, and a Worker has only six.
+    await res.body?.cancel();
     return { ok: true, latencyMs, code: res.status, err: null };
   } catch (e) {
     const aborted = e instanceof Error && (e.name === 'AbortError' || e.name === 'TimeoutError');
@@ -120,6 +123,25 @@ export function probeHeartbeat(
   return problems.some((p) => p.level === 'down')
     ? { ok: false, latencyMs: null, code: null, err, meta }
     : { ok: true, degraded: true, latencyMs: null, code: null, err, meta };
+}
+
+/**
+ * A Worker holds at most six outgoing connections open at once and makes the
+ * rest wait, with our timeout already running. More checks than that, started
+ * together, spend their time budget in the queue and report a healthy service
+ * as not answering. A few at a time starts each timer when its request goes.
+ */
+export async function mapLimit<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
+  const out = new Array<R>(items.length);
+  let next = 0;
+  const lane = async () => {
+    while (next < items.length) {
+      const i = next++;
+      out[i] = await fn(items[i]);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, lane));
+  return out;
 }
 
 export const probe = (m: Monitor, beats: Record<string, { ts: number; meta: string | null }>, now: number) =>

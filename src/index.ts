@@ -1,4 +1,4 @@
-import { HISTORY_DAYS, HOST_QUERY_MAX_HOURS, MONITORS, MONITOR_BY_ID } from './config';
+import { HISTORY_DAYS, HOST_QUERY_MAX_HOURS, MAX_CONCURRENT_PROBES, MONITORS, MONITOR_BY_ID } from './config';
 import { overall, syncBoard } from './board';
 import {
   abandonDeployStmt,
@@ -27,7 +27,7 @@ import {
 } from './db';
 import { authorize, isOperator } from './auth';
 import { blame, deployEvents, excused, isSlow, typicalSeconds } from './deploy';
-import { fmtDuration, nextState, parseMeta, probe } from './monitor';
+import { fmtDuration, mapLimit, nextState, parseMeta, probe } from './monitor';
 import { hostServices } from './inventory';
 import { sendAlert } from './notify';
 import { faviconSvg } from './favicon';
@@ -55,7 +55,7 @@ export async function tick(env: Env, nowSec = Math.floor(Date.now() / 1000)) {
     loadBeats(env.DB),
     latestDeploys(env.DB),
   ]);
-  const observations = await Promise.all(MONITORS.map((m) => probe(m, beats, nowSec)));
+  const observations = await mapLimit(MONITORS, MAX_CONCURRENT_PROBES, (m) => probe(m, beats, nowSec));
 
   const rows: TickResult[] = [];
   const writes: D1PreparedStatement[] = [];
