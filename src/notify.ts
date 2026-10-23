@@ -36,6 +36,8 @@ export function alertText(m: Monitor, t: Transition, obs: Observation, nowSec: n
       }`.trim(),
     };
   }
+  if (t.status === 'maintenance') return { title: `${m.name} maintenance`, body: 'Maintenance in progress.' };
+  if (t.status === 'unknown') return { title: `${m.name} availability unknown`, body: 'No current reading.' };
   const verb = t.status === 'degraded' ? 'is degraded' : 'is down';
   return { title: `${m.name} ${verb}`, body: obs.err ?? verb };
 }
@@ -64,11 +66,10 @@ export async function sendAlert(
   obs: Observation,
   nowSec: number,
 ): Promise<void> {
-  if (!worthAlerting(t)) return;
   const { title, body } = alertText(m, t, obs, t.since);
   const jobs: Promise<void>[] = [];
 
-  if (env.DISCORD_ALERT_WEBHOOK) {
+  if (env.DISCORD_ALERT_WEBHOOK && worthAlerting(t)) {
     jobs.push(
       post(
         env.DISCORD_ALERT_WEBHOOK,
@@ -104,8 +105,8 @@ export async function sendAlert(
           body: JSON.stringify({
             title,
             message: body,
-            request_id: `${m.id}:${t.status}:${t.since}`,
-            urgency: t.status === 'down' || t.status === 'degraded' ? 'time_sensitive' : 'normal',
+            request_id: `${m.id}:${nowSec}`,
+            service: { id: m.id, name: m.name, state: t.status, observed_at: nowSec },
           }),
         },
         'admin alert',

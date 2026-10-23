@@ -25,7 +25,7 @@ afterEach(() => {
 });
 
 describe('operator alerts', () => {
-  it('requests a time-sensitive outage with a stable transition ID and bounded delivery', async () => {
+  it('reports service identity and observation time with bounded delivery', async () => {
     const fetch_mock = vi.fn().mockResolvedValue(new Response(null, { status: 204 }));
     vi.stubGlobal('fetch', fetch_mock);
 
@@ -40,14 +40,14 @@ describe('operator alerts', () => {
     expect(JSON.parse(init.body)).toEqual({
       title: 'Example is down',
       message: 'not answering',
-      request_id: 'example:down:2000',
-      urgency: 'time_sensitive',
+      request_id: 'example:2000',
+      service: { id: 'example', name: 'Example', state: 'down', observed_at: 2000 },
     });
-    expect(JSON.parse(fetch_mock.mock.calls[1][1].body).request_id).toBe('example:down:2000');
+    expect(JSON.parse(fetch_mock.mock.calls[1][1].body).request_id).toBe('example:2060');
   });
 
-  it('keeps subsequent failed polls quiet', async () => {
-    const fetch_mock = vi.fn();
+  it('reports unchanged observations without another Discord alert', async () => {
+    const fetch_mock = vi.fn().mockResolvedValue(new Response(null, { status: 204 }));
     vi.stubGlobal('fetch', fetch_mock);
     const state_row: StateRow = {
       monitor: MONITOR.id,
@@ -62,15 +62,17 @@ describe('operator alerts', () => {
 
     const transition = nextState(state_row, OBSERVATION, 2060);
     expect(transition.changed).toBe(false);
-    await sendAlert(ENV, MONITOR, transition, OBSERVATION, 2060);
-    expect(fetch_mock).not.toHaveBeenCalled();
+    await sendAlert({ ...ENV, DISCORD_ALERT_WEBHOOK: 'https://alerts.example.invalid/other' }, MONITOR, transition, OBSERVATION, 2060);
+    expect(fetch_mock).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(fetch_mock.mock.calls[0][1].body).service.state).toBe('down');
   });
 
-  it('reports degraded services with time-sensitive delivery', async () => {
+  it('reports degraded services without prescribing an interruption', async () => {
     const fetch_mock = vi.fn().mockResolvedValue(new Response(null, { status: 204 }));
     vi.stubGlobal('fetch', fetch_mock);
     await sendAlert(ENV, MONITOR, { ...TRANSITION, status: 'degraded' }, OBSERVATION, 2000);
-    expect(JSON.parse(fetch_mock.mock.calls[0][1].body).urgency).toBe('time_sensitive');
+    expect(JSON.parse(fetch_mock.mock.calls[0][1].body).service.state).toBe('degraded');
+    expect(JSON.parse(fetch_mock.mock.calls[0][1].body).urgency).toBeUndefined();
   });
 
   it('reports recovery without interrupting and gives it a separate ID', async () => {
@@ -81,24 +83,25 @@ describe('operator alerts', () => {
     await sendAlert(ENV, MONITOR, transition, OBSERVATION, 2660);
     expect(JSON.parse(fetch_mock.mock.calls[0][1].body)).toMatchObject({
       title: 'Example recovered',
-      request_id: 'example:up:2600',
-      urgency: 'normal',
+      request_id: 'example:2600',
+      service: { id: 'example', state: 'up', observed_at: 2600 },
     });
-    expect(fetch_mock.mock.calls[1][1].body).toBe(fetch_mock.mock.calls[0][1].body);
+    expect(JSON.parse(fetch_mock.mock.calls[1][1].body).service.observed_at).toBe(2660);
   });
 
-  it('suppresses routine maintenance but alerts when it overruns', async () => {
+  it('reports maintenance and its end without inventing a failure', async () => {
     const fetch_mock = vi.fn().mockResolvedValue(new Response(null, { status: 204 }));
     vi.stubGlobal('fetch', fetch_mock);
     await sendAlert(ENV, MONITOR, { ...TRANSITION, status: 'maintenance' }, OBSERVATION, 2000);
     await sendAlert(
       ENV, MONITOR, { ...TRANSITION, status: 'up', prevStatus: 'maintenance' }, OBSERVATION, 2000,
     );
-    expect(fetch_mock).not.toHaveBeenCalled();
+    expect(fetch_mock).toHaveBeenCalledTimes(2);
+    expect(JSON.parse(fetch_mock.mock.calls[0][1].body).service.state).toBe('maintenance');
 
     await sendAlert(ENV, MONITOR, { ...TRANSITION, prevStatus: 'maintenance' }, OBSERVATION, 2000);
-    expect(fetch_mock).toHaveBeenCalledTimes(1);
-    expect(JSON.parse(fetch_mock.mock.calls[0][1].body).title).toContain('overrun');
+    expect(fetch_mock).toHaveBeenCalledTimes(3);
+    expect(JSON.parse(fetch_mock.mock.calls[2][1].body).title).toContain('overrun');
   });
 
   it('keeps delivery failures from breaking checks or the other alert channel', async () => {

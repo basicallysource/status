@@ -29,7 +29,7 @@ import { authorize, isOperator } from './auth';
 import { blame, deployEvents, excused, isSlow, typicalSeconds } from './deploy';
 import { fmtDuration, nextState, parseMeta, probe } from './monitor';
 import { hostServices } from './inventory';
-import { sendAlert, worthAlerting } from './notify';
+import { sendAlert } from './notify';
 import { faviconSvg } from './favicon';
 import { renderAdmin } from './admin';
 import { PUBLIC_NOTE, publicDetail } from './publish';
@@ -85,6 +85,7 @@ export async function tick(env: Env, nowSec = Math.floor(Date.now() / 1000)) {
       err: obs.err,
       meta,
     });
+    alerts.push({ i, t });
     if (!t.changed) return;
 
     if (t.prevStatus === 'maintenance' && t.status === 'down') {
@@ -115,14 +116,12 @@ export async function tick(env: Env, nowSec = Math.floor(Date.now() / 1000)) {
     }
     // A move into maintenance opens no incident: a deploy is not an incident
     // unless it overruns, and that transition is handled above.
-    alerts.push({ i, t });
   });
 
   await env.DB.batch([...tickStmts(env.DB, rows), ...writes]);
 
   await Promise.allSettled(
     alerts
-      .filter(({ t }) => worthAlerting(t))
       .map(({ i, t }) => sendAlert(env, MONITORS[i], t, observations[i], nowSec)),
   );
 

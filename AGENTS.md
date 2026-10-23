@@ -11,9 +11,12 @@ The page is public and the repo should be publishable.
   why `ADMIN_ALERT_URL` is a secret rather than a var in `wrangler.toml`, and
   why it holds the entire URL: a code that appends a known path to a secret
   base still publishes half the address, and the half that describes it.
-- The same goes for what we send. `{title, message}` over a bearer token is the
-  shape of every notification service there has ever been, and that is the
-  point — nothing here should let a reader infer what is on the other end.
+- The operator webhook uses a generic bearer-authenticated observation envelope:
+  `title`, `message`, `request_id`, and `service` with `id`, `name`, `state`,
+  `observed_at` (Unix seconds). It receives every check, including unchanged
+  readings, so the receiver can group incidents, suppress flapping and show
+  honest gaps. Notification presentation belongs to the receiver. Discord
+  alerts remain transition-only. Never identify the private receiver here.
 - Comments give the engineering reason, not the incident history.
 
 Internal context — real hostnames, credential locations — is in the gitignored
